@@ -19,7 +19,7 @@ Requirements: Herdr **0.1.15** (the tested version), Git, and Python **3.9+**. `
 - Spaces show a robot icon and their open-agent count below the name, beside a two-line initial avatar.
 - Files have Git status colors and file-type icons. Files, diffs, and rendered Markdown open beside your terminal.
 - Changes, History, and Git Graph share one panel. Select files, review diffs, create or switch branches, and use the Fetch menu.
-- A collapsible repository list inside Changes shows branches, changed-file counts, sync state, and conflicts. Select a repository to scope every Git action and preview; each repository keeps its commit draft. **Follow terminal** returns to the terminal's repository.
+- When the folder contains multiple repositories, a collapsible list inside Changes shows branches, changed-file counts, sync state, and conflicts. A single child repository opens automatically with the list hidden. Select a repository to scope every Git action and preview; each repository keeps its commit draft. **Follow terminal** returns to the terminal's repository.
 - A borderless three-line commit area has compact, right-aligned **Commit** and **Generate** controls. Choose a connection, then its available model.
 - The footer shows compact subscription usage meters with consistent green, warning, and red colors.
 

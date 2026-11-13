@@ -23,6 +23,7 @@ export class Repositories {
         const data = JSON.parse(result.stdout);
         if (result.code !== 0 || data.error) throw new Error(data.error || "Cannot discover repositories.");
         this.rows = data.repositories; this.limited = data.limited; this.error = data.warning || null;
+        if (this.rows.length === 1 && !this.owner.root && !this.owner.loading) this.choose(this.rows[0], cx);
       } catch (error) { if (version === this.version) this.error = String(error); }
       finally { if (version === this.version) this.loading = false; cx.notify(); }
     });

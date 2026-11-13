@@ -84,7 +84,12 @@ export default class Changes extends View {
       try {
         const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
         if (key() !== context) return;
-        if (top.code !== 0) { this.selectedCommit = null; this.detail = null; this.graph = []; this.graphError = null; this.history = []; this.historyError = null; this.root = null; this.branch = null; this.head = ""; this.files = []; this.open = null; this.error = "Select a repository above, or open a Git folder"; return; }
+        if (top.code !== 0) {
+          this.selectedCommit = null; this.detail = null; this.graph = []; this.graphError = null; this.history = []; this.historyError = null; this.root = null; this.branch = null; this.head = ""; this.files = []; this.open = null;
+          this.error = this.repositories.rows.length > 1 ? "Select a repository above" : "No Git repository found in this folder";
+          if (this.repositories.rows.length === 1 && this.repositories.rows[0].root !== cwd) this.repositories.choose(this.repositories.rows[0], cx);
+          return;
+        }
         const root = top.stdout.trim(), git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
         const status = await git(["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]);
         if (status.code !== 0) throw new Error(status.stderr);
@@ -392,7 +397,7 @@ export default class Changes extends View {
         if (e.key === "escape" && this.view !== "changes" && this.selectedCommit) { this.closeDetail(cx); cx.stop_propagation(); }
         if (e.key === "escape" && this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); }
       })
-      .child(this.repositories.render(t, cx))
+      .when(this.repositories.rows.length > 1, el => el.child(this.repositories.render(t, cx)))
       .child(h_flex().h(42).flex_none().px(10).gap(8).items_center().border_b(1).border_color(t.border)
         .child(Tabs.new("git-views").h_flex().flex_none().h(30).p(2).gap(2).rounded(6).bg(t.raised)
           .children(["changes", "history", "graph"].map(view => div().w(28).h(26).flex_none().tooltip(view === "changes" ? "Changes" : view === "history" ? "History" : "Git Graph").child(Tab.new(`git-view-${view}`).w(28).h(26).items_center().justify_center().rounded(4)

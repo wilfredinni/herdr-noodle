@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-function harness() {
+function harness(repositoryCount = 2) {
   let space = { id: 's', active: true, folder: '/workspace', machine: null };
   let cwd = '/workspace', focus = { pane: 'terminal', tab: 'tab' }, discoveryRuns = 0;
   const state = new Map(), jobs = [], commands = [], timers = [];
@@ -21,7 +21,7 @@ function harness() {
       commands.push({ program, args: [...args], options });
       if (program === 'python3') { discoveryRuns++; return { code: 0, stdout: JSON.stringify({ repositories: [
         { root: '/workspace/a', name: 'a', branch: 'main', count: 1 },
-        { root: '/workspace/b', name: 'b', branch: 'topic', count: 1 }], limited: false }) }; }
+        { root: '/workspace/b', name: 'b', branch: 'topic', count: 1 }].slice(0, repositoryCount), limited: false }) }; }
       if (args.includes('--show-toplevel')) {
         const path = options.cwd.startsWith('/workspace/') ? options.cwd.split('/').slice(0, 3).join('/') : root();
         return { code: path ? 0 : 1, stdout: path || '' };
@@ -100,4 +100,10 @@ test('discovery uses the live terminal folder rather than the space creation fol
   h.view.repositories.refresh(h.cx); await h.flush();
   assert.equal(h.discoveryRuns(), 1);
   assert.equal(h.context.workspace().folder, '/workspace');
+});
+
+test('a single child repository opens automatically', async () => {
+  const h = harness(1); await h.flush();
+  assert.equal(h.view.root, '/workspace/a');
+  assert.equal(h.state.get('git.repository.s').root, '/workspace/a');
 });
