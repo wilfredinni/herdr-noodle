@@ -1,7 +1,7 @@
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, Tabs, Tab, Button, Checkbox } from "gpui-base";
 import { spaces, panes, focused, exec, watchFolder, theme, settings, run, shared, setShared } from "herdr";
-import { GRAPH_ARGS, HISTORY_ARGS, GRAPH_LIMIT, GRAPH_ROW_HEIGHT, graphRows, COMMIT_FORMAT, commitDetail, refLabels, shortAge } from "./graph.js";
+import { GRAPH_ARGS, HISTORY_ARGS, GRAPH_ROW_HEIGHT, graphRows, COMMIT_FORMAT, commitDetail, refLabels, shortAge } from "./graph.js";
 import { GitToolbar } from "./gitToolbar.js";
 import { showGitError } from "./gitError.js";
 import { FileActions } from "./fileActions.js";
@@ -287,9 +287,9 @@ export default class Changes extends View {
   }
 
   graphView(t, history = false) {
-    const rows = history ? this.history : this.graph, count = rows.length;
+    const rows = history ? this.history : this.graph;
     const error = history ? this.historyError : this.graphError, loading = history ? this.historyLoading : this.graphLoading;
-    const id = history ? "git-history" : "git-graph", scope = history ? this.historyPath || this.branch || "HEAD" : "all branches";
+    const id = history ? "git-history" : "git-graph";
     const width = history ? 0 : Math.max(38, ...rows.map(row => row.lanes * 12 + 12));
     const empty = error || this.error || (!this.root ? "Open a Git folder" : loading || this.loading ? "Loading history…" : "No commits yet");
     return v_flex().flex_1().min_h(0)
@@ -317,9 +317,7 @@ export default class Changes extends View {
               .child(Scrollbar.vertical(`${id}-list`).absolute().inset_0()))))
         .child(Scrollbar.horizontal(`${id}-x`).absolute().inset_0()))
       .when(Boolean(this.selectedCommit), el => el.child(this.commitView(t)))
-      .when(Boolean(error) && rows.length > 0, el => el.child(div().px(14).py(8).text_size(12).text_color(t.ansi1).child(error)))
-      .when(!history, el => el.child(div().px(14).py(8).border_t(1).border_color(t.border).text_size(11).text_color(t.muted)
-        .child(count >= GRAPH_LIMIT ? `Latest ${GRAPH_LIMIT} commits · ${scope}` : `${count} commits · ${scope}`)));
+      .when(Boolean(error) && rows.length > 0, el => el.child(div().px(14).py(8).text_size(12).text_color(t.ansi1).child(error)));
   }
 
   openFile(file, commit, cx, options = {}) {
@@ -434,7 +432,7 @@ export default class Changes extends View {
     const enabled = hasMessage && !this.busy && !this.loading && !conflicts;
     const disabled = this.busy || this.loading || !current;
     const name = this.root?.split(/[\\/]/).filter(Boolean).pop() || "repository";
-    const summary = this.view === "changes" ? `${this.files.length} files` : this.view === "stashes" ? `${this.stash.entries.length} saved ${this.stash.entries.length === 1 ? "stash" : "stashes"}` : `${(this.view === "history" ? this.history : this.graph).length} commits`;
+    const summary = this.view === "changes" ? `${this.files.length} files` : this.view === "stashes" ? `${this.stash.entries.length} saved ${this.stash.entries.length === 1 ? "stash" : "stashes"}` : "";
     return v_flex().id("changes").size_full().min_w(0).min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => {
         if (e.key === "escape" && this.view !== "changes" && this.selectedCommit) { this.closeDetail(cx); cx.stop_propagation(); }
@@ -448,12 +446,12 @@ export default class Changes extends View {
             .accessibility_label(label).bg("#00000000").text_color(this.view === view ? t.foreground : t.muted).border_b(this.view === view ? 2 : 0).border_color(t.accent)
             .focus(el => el.bg(t.raised)).on_click((_e, cx) => this.selectView(view, cx))
             .child(svg(`mods/changes-graph/${view}.svg`).size(13)).child(label))))
-      .child(h_flex().h(36).flex_none().px(14).gap(6).items_center().text_size(11).text_color(t.muted)
-        .child(div().child(summary))
+      .when(this.view !== "history", panel => panel.child(h_flex().h(36).flex_none().px(14).gap(6).items_center().text_size(11).text_color(t.muted)
+        .when(Boolean(summary), el => el.child(div().child(summary)))
         .when(this.view === "changes", el => el.child(div().text_color(t.ansi2).child(`+${add}`)).child(div().text_color(t.ansi1).child(`−${del}`)))
         .child(div().flex_1())
         .when(this.view === "changes", el => el.child(this.fileActions.header(t, cx)))
-        .when(this.view !== "changes", el => el.child(div().child(this.view === "graph" ? "All refs" : "Local"))))
+        .when(this.view === "graph", el => el.child(div().child("All refs")))))
       .when(this.view === "history" || this.view === "graph", el => el.child(this.graphView(t, this.view === "history")))
       .when(this.view === "stashes", el => el.child(this.stash.render(t, cx)))
       .when(this.view === "changes", panel => panel

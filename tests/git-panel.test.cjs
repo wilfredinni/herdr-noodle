@@ -103,7 +103,7 @@ test('selecting a Graph commit opens its real file diff in the shared preview', 
   h.view.selectView('history', h.cx); await h.flush();
   const history = h.view.render(h.cx);
   assert.equal(find(history, `commit-${hash}`).attrs.h[0], 24);
-  assert.doesNotMatch(texts(history), /\d+ commits · main|All changed files in/);
+  assert.doesNotMatch(texts(history), /\d+ commits\b|All changed files in/);
   h.view.view = 'graph'; h.view.pickCommit({ fullHash: hash }, h.cx); await h.flush();
   const selection = h.state.get('git-file-preview.tab');
   assert.equal(selection.hash, hash); assert.equal(selection.file.path, 'a.txt');
