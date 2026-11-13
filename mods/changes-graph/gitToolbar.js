@@ -267,8 +267,7 @@ export class GitToolbar {
     const trigger = Button.new("repository-actions").size(28).flex().items_center().justify_center().rounded(4).bg("#00000000").text_color(t.muted).disabled(!this.enabled())
       .accessibility_label("Repository actions").tooltip("Repository actions").focus(el => el.border_color(t.accent)).child(svg("mods/changes-graph/more.svg").size(14));
     return h_flex().h(40).flex_none().px(14).gap(9).items_center()
-      .child(svg("mods/changes-graph/repository.svg").size(14).flex_none().text_color(t.muted))
-      .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().tooltip(p.root || "").child(title))
+      .child(h_flex().flex_1().min_w(0).child(p.repositories.selector(title, t, cx, workspace)))
       .child(this.menu("repository", trigger, body, 240, cx));
   }
 

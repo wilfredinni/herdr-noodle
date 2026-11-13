@@ -268,12 +268,12 @@ export default class Changes extends View {
             .child(div().text_color(t.ansi2).child(`+${detail.files.reduce((n, f) => n + (f.add || 0), 0)}`))
             .child(div().text_color(t.ansi1).child(`−${detail.files.reduce((n, f) => n + (f.del || 0), 0)}`)))
           .when(detail.parents.length > 1, e => e.child(div().text_color(t.muted).child("Changes against first parent")))
-          .children(detail.files.slice(0, 1000).map(file => Button.new(`commit-file-${file.path}`).h_flex().w_full().h(26).flex_none().gap(8).min_w(0).px(4).rounded(4).cursor_pointer().accessibility_label(`Open ${file.path}`).hover(e => e.bg(t.hover)).on_click((_e, cx) => this.openFile(file, detail, cx))
+          .child(v_flex().id("commit-files").flex_none().gap(0).children(detail.files.slice(0, 1000).map(file => Button.new(`commit-file-${file.path}`).h_flex().w_full().h(GRAPH_ROW_HEIGHT).flex_none().gap(8).min_w(0).px(4).rounded(4).cursor_pointer().accessibility_label(`Open ${file.path}`).hover(e => e.bg(t.hover)).on_click((_e, cx) => this.openFile(file, detail, cx))
             .child(div().w(14).flex_none().text_color(file.status === "D" ? t.ansi1 : file.status === "A" ? t.ansi2 : t.blocked).child(file.status))
             .child(div().flex_1().min_w(0).truncate().tooltip(file.path).when(file.status === "D", el => el.line_through().text_color(t.muted)).child(file.path))
             .when(file.add > 0, e => e.child(div().text_color(t.ansi2).child(`+${file.add}`)))
             .when(file.del > 0, e => e.child(div().text_color(t.ansi1).child(`−${file.del}`)))
-            .when(file.binary, e => e.child(div().text_color(t.muted).child("Binary")))))
+            .when(file.binary, e => e.child(div().text_color(t.muted).child("Binary"))))))
           .when(detail.files.length > 1000, e => e.child(div().text_color(t.muted).child("Showing the first 1,000 files")))));
   }
 
@@ -550,7 +550,6 @@ export default class Changes extends View {
         if (e.key === "escape" && this.view !== "changes" && this.selectedCommit) { this.closeDetail(cx); cx.stop_propagation(); }
         if (e.key === "escape" && this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); }
       })
-      .when(this.repositories.rows.length > 1, el => el.child(this.repositories.render(t, cx)))
       .child(this.gitToolbar.repositoryHeader(t, cx))
       .child(Tabs.new("git-views").h_flex().h(38).flex_none().px(10).gap(8).border_b(1).border_color(t.border).bg("#00000000")
         .children([["changes", "Changes"], ["history", "History"], ["graph", "Graph"], ["stashes", "Stash"]].map(([view, label]) =>

@@ -1,17 +1,17 @@
 import { div, svg } from "gpui-kit";
-import { v_flex, h_flex, Button } from "gpui-base";
+import { v_flex, h_flex, Button, Popover, ScrollHandle } from "gpui-base";
 import { exec, appHome, readTextFile, shared, setShared } from "herdr";
 
 export class Repositories {
   constructor(owner, workspace, cx) {
-    this.owner = owner; this.workspace = workspace; this.rows = []; this.expanded = true;
+    this.owner = owner; this.workspace = workspace; this.rows = []; this.open = false; this.focus = cx.focus_handle(); this.scroll = ScrollHandle.new();
     cx.timer.every(60000, cx => this.refresh(cx, true));
   }
 
   refresh(cx, force = false) {
     const workspace = this.workspace(), context = JSON.stringify(workspace);
     if (!workspace.folder || (context === this.context && (this.loading || !force || this.owner.busy))) return;
-    if (context !== this.context) { this.rows = []; this.error = null; this.limited = false; }
+    if (context !== this.context) { this.open = false; this.rows = []; this.error = null; this.limited = false; }
     this.context = context; this.loading = true;
     const version = this.version = (this.version ?? 0) + 1;
     cx.spawn(async cx => {
@@ -23,6 +23,7 @@ export class Repositories {
         const data = JSON.parse(result.stdout);
         if (result.code !== 0 || data.error) throw new Error(data.error || "Cannot discover repositories.");
         this.rows = data.repositories; this.limited = data.limited; this.error = data.warning || null;
+        if (this.rows.length < 2) this.open = false;
         if (this.rows.length === 1 && !this.owner.root && !this.owner.loading) this.choose(this.rows[0], cx);
       } catch (error) { if (version === this.version) this.error = String(error); }
       finally { if (version === this.version) this.loading = false; cx.notify(); }
@@ -33,6 +34,7 @@ export class Repositories {
     if (this.owner.busy || !this.rows.includes(row)) return;
     const workspace = this.workspace();
     if (JSON.stringify(workspace) !== this.context) return;
+    this.open = false;
     setShared(`git.repository.${workspace.id}`, { workspace: workspace.folder, on: workspace.on, root: row.root });
     this.owner.refresh(cx); cx.notify();
   }
@@ -42,35 +44,51 @@ export class Repositories {
     if (row) { row.branch = branch || "(detached)"; row.count = files.length; row.ahead = sync?.ahead || 0; row.behind = sync?.behind || 0; row.conflict = files.some(file => file.status === "U"); row.error = null; }
   }
 
-  render(t, cx) {
-    const p = this.owner, workspace = this.workspace();
-    return v_flex().flex_none().border_b(1).border_color(t.border)
-      .child(h_flex().h(36).flex_none().px(8).gap(4).items_center()
-        .child(Button.new("repositories-toggle").h_flex().h(28).flex_1().min_w(0).px(4).gap(7).items_center().justify_start().rounded(5).bg("#00000000").text_color(t.foreground).text_size(12).font_normal()
-          .accessibility_label(this.expanded ? "Collapse repositories" : "Expand repositories").focus(el => el.border_color(t.accent))
-          .on_click((_e, cx) => { this.expanded = !this.expanded; cx.notify(); })
-          .child(svg(`mods/changes-graph/${this.expanded ? "chevron" : "expand"}.svg`).size(11))
-          .child(div().font_semibold().child("Repositories"))
-          .child(div().text_size(11).text_color(t.muted).child(String(this.rows.length)))
-          .child(div().flex_1().min_w(0).truncate().text_right().text_size(11).text_color(t.muted).tooltip(workspace.folder || "").child((workspace.folder || "").split(/[\\/]/).filter(Boolean).pop() || "")))
-        .child(Button.new("repositories-refresh").size(28).flex_none().flex().items_center().justify_center().rounded(5).bg("#00000000").text_color(t.muted).disabled(this.loading || p.busy)
-          .accessibility_label("Refresh repositories").tooltip(this.error || (this.limited ? "Search limited: open a closer folder to find more repositories. Refresh repositories." : "Refresh repositories")).focus(el => el.border_color(t.accent)).on_click((_e, cx) => { this.refresh(cx, true); cx.notify(); })
-          .child(svg("mods/changes-graph/fetch.svg").size(13).when(this.loading, el => el.spin(900)))))
-      .when(this.expanded, el => el
-        .child(v_flex().id("repositories-list").overflow_y_scrollbar().h(Math.min(180, Math.max(36, this.rows.length * 34 + 6))).flex_none().px(6).pb(6).gap(2)
-          .children(this.rows.map(row => {
-            const active = p.root === row.root && !p.loading, sync = [row.ahead ? `↑${row.ahead}` : "", row.behind ? `↓${row.behind}` : ""].filter(Boolean).join(" ");
-            return Button.new(`repository-${row.root}`).h_flex().w_full().h(32).flex_none().px(8).gap(8).items_center().justify_start().rounded(5).text_size(12).font_normal().text_color(t.foreground)
+  selector(title, t, cx, workspace = this.workspace()) {
+    const p = this.owner, multiple = this.rows.length > 1;
+    const label = h_flex().flex_1().min_w(0).gap(9).items_center()
+      .child(svg("mods/changes-graph/repository.svg").size(14).flex_none().text_color(t.muted))
+      .child(div().min_w(0).truncate().text_size(13).font_semibold().child(title));
+    if (!multiple) return label.tooltip(p.root || "");
+    const trigger = Button.new("repository-select").h_flex().h(30).flex_1().min_w(0).max_w("100%").px(4).gap(7).items_center().justify_start().rounded(4).bg("#00000000").text_color(t.foreground).disabled(p.busy)
+      .accessibility_label(`Select repository, current: ${title}`).tooltip(p.root || "Select a repository").hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent))
+      .child(label).child(svg("mods/changes-graph/chevron.svg").size(11).flex_none().text_color(t.muted));
+    return Popover.new("repository-picker").open(this.open).anchor("top_left").track_focus(this.focus)
+      .on_open_change((open, cx) => {
+        this.open = open && !p.busy;
+        this.at = Math.max(0, this.rows.findIndex(row => row.root === p.root));
+        if (this.open) this.scroll.scroll_to_item(this.at);
+        cx.notify();
+      }).trigger(trigger)
+      .content(v_flex().w(420).p(8).gap(6).rounded(8).border_1().border_color(t.border).bg(t.popover).text_color(t.foreground).track_focus(this.focus)
+        .on_key_down((e, cx) => {
+          if (e.key === "escape") this.open = false;
+          else if (["up", "down"].includes(e.key)) {
+            this.at = Math.max(0, Math.min(this.rows.length - 1, (this.at || 0) + (e.key === "down" ? 1 : -1)));
+            this.scroll.scroll_to_item(this.at);
+          } else if (e.key === "enter") { const row = this.rows[this.at || 0]; if (row) this.choose(row, cx); }
+          else return;
+          cx.stop_propagation(); cx.notify();
+        })
+        .child(h_flex().h(28).flex_none().px(8).gap(8).items_center().text_size(11).text_color(t.muted)
+          .child(div().flex_1().min_w(0).truncate().tooltip(workspace.folder || "").child(`${(workspace.folder || "").split(/[\\/]/).filter(Boolean).pop() || "Workspace"} · ${this.rows.length} repositories`))
+          .child(Button.new("repositories-refresh").size(26).flex_none().flex().items_center().justify_center().rounded(4).bg("#00000000").text_color(t.muted).disabled(this.loading || p.busy)
+            .accessibility_label("Refresh repositories").tooltip(this.error || (this.limited ? "Search limited: open a closer folder to find more repositories. Refresh repositories." : "Refresh repositories")).focus(el => el.border_color(t.accent))
+            .on_click((_e, cx) => { this.refresh(cx, true); cx.notify(); })
+            .child(svg("mods/changes-graph/fetch.svg").size(13).when(this.loading, el => el.spin(900)))))
+        .child(v_flex().id("repositories-list").h(Math.min(272, this.rows.length * 34)).flex_none().overflow_y_scrollbar().track_scroll(this.scroll).gap(2)
+          .children(this.rows.map((row, index) => {
+            const active = p.root === row.root, sync = [row.ahead ? `↑${row.ahead}` : "", row.behind ? `↓${row.behind}` : ""].filter(Boolean).join(" ");
+            return Button.new(`repository-${row.root}`).h_flex().w_full().h(32).flex_none().px(8).gap(8).items_center().justify_start().rounded(5).border_1().border_color(this.at === index ? t.input : "#00000000").text_size(12).font_normal().text_color(t.foreground)
               .bg(active ? t.selected : "#00000000").disabled(p.busy).accessibility_label(`Select repository ${row.name}, ${row.branch || "unknown branch"}, ${row.count ?? "unknown"} changed files`)
-              .tooltip(`${row.root}\n${row.branch || "Status unavailable"}${row.error ? "\n" + row.error : ""}${row.worktree ? "\nLinked worktree or submodule" : ""}`).focus(el => el.border_color(t.accent))
+              .tooltip(`${row.root}\n${row.branch || "Status unavailable"}${row.error ? "\n" + row.error : ""}${row.worktree ? "\nLinked worktree or submodule" : ""}`).hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent))
               .on_click((_e, cx) => this.choose(row, cx))
               .child(svg(`mods/changes-graph/${row.worktree ? "branch" : "repository"}.svg`).size(13).flex_none().text_color(t.muted))
               .child(div().flex_1().min_w(0).truncate().child(row.name))
-              .child(div().max_w(140).min_w(0).truncate().text_size(11).text_color(t.muted).child(row.branch || "Unavailable"))
+              .child(div().max_w(130).min_w(0).truncate().text_size(11).text_color(t.muted).child(row.branch || "Unavailable"))
               .when(Boolean(sync), el => el.child(div().flex_none().text_size(11).text_color(t.muted).child(sync)))
               .when(row.conflict || Boolean(row.error), el => el.child(svg("mods/changes-graph/warning.svg").size(13).text_color(t.ansi1)))
-              .child(div().min_w(18).px(4).rounded(3).bg(t.raised).text_right().text_size(11).child(row.count === null ? "?" : String(row.count)));
-          }))
-          .when(!this.rows.length, el => el.child(div().px(8).py(8).text_size(12).text_color(t.muted).child(this.loading ? "Finding repositories…" : this.error || "No repositories in this workspace")))));
+              .child(div().w(24).flex_none().text_right().text_size(11).text_color(row.count ? t.foreground : t.dim).tooltip(row.count == null ? "Changed-file count unavailable" : `${row.count} changed files`).child(row.count == null ? "?" : String(row.count)));
+          }))));
   }
 }

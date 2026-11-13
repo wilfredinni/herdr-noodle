@@ -3,14 +3,29 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
+function element(id) {
+  const node = { id, nodes: [], attrs: {}, handlers: {} }; let proxy;
+  proxy = new Proxy(node, { get(target, key) {
+    if (key === 'id' && target.id == null) return value => (target.id = value, proxy);
+    if (key in target) return target[key];
+    if (['child', 'trigger', 'content'].includes(key)) return value => (target.nodes.push(value), proxy);
+    if (key === 'children') return values => (target.nodes.push(...values), proxy);
+    if (key === 'when') return (condition, fn) => (condition && fn(proxy), proxy);
+    return (...values) => { target.attrs[key] = values; if (key.startsWith('on_')) target.handlers[key.slice(3)] = values.at(-1); return proxy; };
+  } }); return proxy;
+}
+const find = (node, id) => node?.id === id ? node : node?.nodes?.map(child => find(child, id)).find(Boolean);
+const texts = node => typeof node === 'string' ? node : (node?.nodes || []).map(texts).join(' ');
+
 function harness(repositoryCount = 2) {
   let space = { id: 's', active: true, folder: '/workspace', machine: null };
   let cwd = '/workspace', focus = { pane: 'terminal', tab: 'tab' }, discoveryRuns = 0;
   const state = new Map(), jobs = [], commands = [], timers = [];
-  const cx = { notify() {}, focus_handle: () => ({}), spawn(fn) { jobs.push(fn(cx)); }, timer: { every(ms, fn) { timers.push({ ms, fn }); } } };
+  const cx = { notify() {}, stop_propagation() {}, focus_handle: () => ({}), spawn(fn) { jobs.push(fn(cx)); }, timer: { every(ms, fn) { timers.push({ ms, fn }); } } };
   const input = { text: '', on() {}, set_value(text) { this.text = text; }, value() { return this.text; } };
   const root = () => cwd === '/workspace' ? null : cwd;
   const context = vm.createContext({ View: class {}, Map, JSON, Date,
+    div: element, svg: () => element(), v_flex: element, h_flex: element, Button: { new: element }, Popover: { new: element }, ScrollHandle: { new: () => ({ scroll_to_item() {} }) },
     spaces: () => [space], focused: () => ({ ...focus, cwd }),
     panes: () => [{ pane: 'terminal', tab: 'tab', terminal: 't', cwd }, { pane: 'preview', tab: 'tab', mod: 'git-file-preview' }],
     shared: key => state.get(key), setShared: (key, value) => state.set(key, value),
@@ -106,4 +121,33 @@ test('a single child repository opens automatically', async () => {
   const h = harness(1); await h.flush();
   assert.equal(h.view.root, '/workspace/a');
   assert.equal(h.state.get('git.repository.s').root, '/workspace/a');
+});
+
+test('repository title picker shows status, switches with keys, closes, and preserves drafts', async () => {
+  const h = harness(); await h.flush();
+  const repos = h.view.repositories, t = new Proxy({}, { get: (_, key) => key });
+  repos.choose(repos.rows[0], h.cx); await h.flush(); h.view.message = 'Keep my draft';
+  Object.assign(repos.rows[1], { ahead: 2, behind: 1, count: 5, conflict: true });
+  let picker = repos.selector('a', t, h.cx);
+  assert.ok(find(picker, 'repository-select')); assert.equal(find(picker, 'repositories-toggle'), undefined);
+  picker.handlers.open_change(true, h.cx); picker = repos.selector('a', t, h.cx);
+  assert.equal(repos.open, true); assert.match(texts(picker), /workspace · 2 repositories.*b.*topic.*↑2 ↓1.*5/);
+  assert.equal(find(picker, 'repository-/workspace/a').attrs.bg[0], 'selected');
+  assert.equal(typeof find(picker, 'repository-/workspace/b').attrs.hover[0], 'function');
+  assert.equal(typeof find(picker, 'repository-select').attrs.hover[0], 'function');
+  picker.nodes[1].handlers.key_down({ key: 'down' }, h.cx);
+  picker.nodes[1].handlers.key_down({ key: 'enter' }, h.cx); await h.flush();
+  assert.equal(h.view.root, '/workspace/b'); assert.equal(repos.open, false);
+  repos.choose(repos.rows[0], h.cx); await h.flush(); assert.equal(h.view.message, 'Keep my draft');
+  picker = repos.selector('a', t, h.cx); picker.handlers.open_change(true, h.cx);
+  picker.nodes[1].handlers.key_down({ key: 'escape' }, h.cx); assert.equal(repos.open, false);
+  h.view.busy = true; picker.handlers.open_change(true, h.cx); assert.equal(repos.open, false);
+});
+
+test('zero or one repository keeps a plain title and a workspace change closes the picker', async () => {
+  const h = harness(1); await h.flush();
+  const repos = h.view.repositories, t = new Proxy({}, { get: (_, key) => key });
+  assert.equal(find(repos.selector('a', t, h.cx), 'repository-select'), undefined);
+  repos.rows = []; assert.match(texts(repos.selector('Repository', t, h.cx)), /Repository/);
+  repos.open = true; h.navigate('/other'); repos.refresh(h.cx); assert.equal(repos.open, false); await h.flush();
 });

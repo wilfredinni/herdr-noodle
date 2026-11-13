@@ -44,7 +44,7 @@ function harness(root) {
     settings: () => ({}), theme: () => t, spaces: () => [{ id: 's', active: true, folder: root, machine: null }],
     focused: () => ({ pane: 'terminal', tab: 'tab', cwd: root }), panes: () => [{ pane: 'terminal', terminal: 't', tab: 'tab', cwd: root }],
     shared: key => state.get(key), setShared: (key, value) => state.set(key, value), run() {},
-    Repositories: class { constructor(_, workspace) { this.rows = []; this.workspace = workspace; } refresh() {} update() {} },
+    Repositories: class { constructor(_, workspace) { this.rows = []; this.workspace = workspace; } refresh() {} update() {} selector(title) { return element().child(title); } },
     exec: (command, args, options) => new Promise(resolve => execFile(command, args, { cwd: options.cwd, encoding: 'utf8' }, (error, stdout, stderr) => resolve({ code: error?.code ?? 0, stdout, stderr }))),
     showGitError: (_, error) => errors.push(error.message), notify() {},
   });
