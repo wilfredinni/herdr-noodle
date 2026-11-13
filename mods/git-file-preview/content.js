@@ -33,9 +33,9 @@ export function diffRows(lines) {
   });
 }
 
-export async function readDiff(input, host) {
+export async function readDiff(input, host, previous) {
   const s = validateSelection(input), file = s.file;
-  let lines;
+  let lines, header = "";
   if (!s.hash && s.diffMode !== "staged" && (file.fresh || (!s.hasHead && file.status === "A" && s.diffMode !== "unstaged"))) {
     const text = await host.readTextFile(`${s.root}/${file.path}`, { on: s.on });
     if (text === null) throw new Error("Cannot preview this file (too large, missing, or unreadable)");
@@ -50,15 +50,18 @@ export async function readDiff(input, host) {
       ? s.parent ? ["diff", ...options, s.parent, s.hash, "--", file.path] : ["show", "--format=", "--root", ...options, s.hash, "--", file.path]
       : ["diff", ...options, ...(s.diffMode === "staged" ? ["--cached"] : s.diffMode === "unstaged" ? [] : s.hasHead ? ["HEAD"] : []), "--", file.path];
     const output = await git(s, args, host), all = output.replace(/\n$/, "").split("\n"), start = all.findIndex(line => line.startsWith("@@"));
+    header = all.slice(0, start < 0 ? 10 : start).join("\n");
     lines = start < 0 ? [file.binary || output.includes("Binary files ") ? "Binary file · no text diff" : "No text diff available"] : all.slice(start);
   }
+  const signature = JSON.stringify([header, lines.slice(0, MAX_LINES).map(line => line.slice(0, MAX_LINE + 1)), lines.length > MAX_LINES]);
+  if (previous?.signature === signature && !previous.syntaxError) return previous;
   const rows = diffRows(lines);
   let syntaxError = null;
   if (rows.some(row => row.number !== undefined)) {
     try { await highlightRows(s, rows, host); }
     catch (error) { syntaxError = String(error.message || error); }
   }
-  return { rows, truncated: lines.length > MAX_LINES, syntaxError };
+  return { rows, truncated: lines.length > MAX_LINES, syntaxError, signature };
 }
 
 export async function readSource(input, host) {
@@ -81,20 +84,20 @@ export async function readMarkdown(input, host) {
 }
 
 
-export async function readFile(input, host) {
+export async function readFile(input, host, previous) {
   const s = validateSelection(input), source = await readSource(s, host);
   const lines = source.text.replace(/\n$/, "").split("\n");
+  const diff = s.file.status === "A" || s.gitRoot === null ? null : await host.exec("git", [...READ, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--unified=0", "HEAD", "--", s.file.path], { cwd: s.root, on: s.on }).catch(() => null);
+  const marks = diff?.code === 0 ? lineChanges(diff.stdout, Math.min(lines.length, 5000)) : new Map();
+  const signature = JSON.stringify([source, [...marks]]);
+  if (previous?.signature === signature && !previous.syntaxError) return previous;
   const rows = lines.slice(0, 5000).map((line, index) => ({ kind: "", number: index + 1,
     text: untab(line.length > MAX_LINE ? line.slice(0, MAX_LINE) + "… (line truncated)" : line) || " " }));
   let syntaxError = null;
-  const [, diff] = await Promise.all([
-    highlightRows({ ...s, hash: null, parent: null, hasHead: false }, rows, host).catch(error => { syntaxError = String(error.message || error); }),
-    s.file.status === "A" || s.gitRoot === null ? Promise.resolve(null) : host.exec("git", [...READ, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--unified=0", "HEAD", "--", s.file.path], { cwd: s.root, on: s.on }).catch(() => null),
-  ]);
-  const marks = diff?.code === 0 ? lineChanges(diff.stdout, rows.length) : new Map();
+  await highlightRows({ ...s, hash: null, parent: null, hasHead: false }, rows, host).catch(error => { syntaxError = String(error.message || error); });
   for (const row of rows) {
     if (s.file.status === "A" && source.text) row.change = "added";
     else Object.assign(row, marks.get(row.number));
   }
-  return { rows, truncated: source.truncated || lines.length > 5000, syntaxError };
+  return { rows, truncated: source.truncated || lines.length > 5000, syntaxError, signature };
 }

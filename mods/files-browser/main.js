@@ -5,6 +5,7 @@ import { spaces, panes, focused, exec, watchFolder, theme, window, run, shared, 
 
 import { gitState, fileState } from "./gitState.js";
 import { fileIcon } from "./fileIcons.js";
+import { readFile } from "fs/promises";
 
 function location() {
   const space = spaces().find(s => s.active), f = focused();
@@ -73,6 +74,30 @@ export default class Files extends View {
     if (entries.length > PER_FOLDER || used + entries.length > TOTAL) this.limited = true;
   }
 
+  async trackedFiles(root, on, context) {
+    if (context.gitRoot !== root) {
+      context.gitRoot = root; context.indexPath = null; context.indexVersion = null; context.tracked = null;
+    }
+    let version = null;
+    // shortcut: remote or unreadable indexes use ls-files until binary remote file reads are available.
+    if (!on) try {
+      if (!context.indexPath) {
+        const path = await exec("git", ["rev-parse", "--path-format=absolute", "--git-path", "index"], { cwd: root });
+        if (path.code !== 0) throw new Error("Cannot locate Git index");
+        context.indexPath = path.stdout.replace(/\r?\n$/, "");
+      }
+      const index = await readFile(context.indexPath), checksum = index.slice(-20);
+      // index.skipHash writes a zero checksum, which cannot identify a cached index.
+      if (index.length >= 32 && checksum.some(byte => byte !== 0)) version = Array.from(checksum).join(",");
+    } catch {}
+    if (version && version === context.indexVersion && context.tracked) return context.tracked;
+    const result = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "ls-files", "--cached", "-z"], { cwd: root, on });
+    if (result.code !== 0) throw new Error("Cannot read tracked Git files");
+    const tracked = gitState(root, "", result.stdout).tracked;
+    context.indexVersion = version; context.tracked = tracked;
+    return tracked;
+  }
+
   refresh(cx) {
     const { cwd, on } = location(), next = key();
     if (next !== this.context?.key) {
@@ -99,10 +124,10 @@ export default class Files extends View {
           const read = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
           const [status, tracked] = await Promise.all([
             exec("git", [...read, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--ignored=matching"], { cwd: root, on }),
-            exec("git", [...read, "ls-files", "--cached", "-z"], { cwd: root, on }),
+            this.trackedFiles(root, on, context),
           ]);
-          if (status.code !== 0 || tracked.code !== 0) throw new Error("Cannot read Git file status");
-          state = gitState(root, status.stdout, tracked.stdout);
+          if (status.code !== 0) throw new Error("Cannot read Git file status");
+          state = gitState(root, status.stdout, tracked);
         }
         if (!this.current(context)) return;
         this.git = state; this.error = null; this.watch(cwd, cx);

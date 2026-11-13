@@ -179,7 +179,7 @@ def epoch(value):
 def auth_modes(accounts):
     modes = {}
     if not isinstance(accounts, list):
-        return modes
+        raise ValueError('Unsupported OpenCode connections response')
     for account in accounts:
         provider = account.get('id')
         methods = {c.get('method') for c in account.get('connections', [])}
@@ -194,27 +194,6 @@ def auth_modes(accounts):
         else:
             modes[provider] = 'unknown'
     return modes
-
-
-def spending(stats, modes):
-    total, sessions, models = stats.get('cost'), stats.get('sessions'), stats.get('models')
-    if not number(total) or not number(sessions) or not isinstance(models, list):
-        raise ValueError('Unsupported OpenCode statistics format')
-    api, subscription, unknown = 0, 0, 0
-    for model in models:
-        cost = model.get('cost')
-        if not number(cost):
-            raise ValueError('Invalid model cost')
-        mode = modes.get((model.get('model') or {}).get('providerID'), 'unknown')
-        if mode == 'api':
-            api += cost
-        elif mode == 'subscription':
-            subscription += cost
-        else:
-            unknown += cost
-    if abs(total - api - subscription - unknown) > 0.01:
-        api, subscription, unknown = None, None, total
-    return dict(apiEstimateUsd=None if unknown > 0 else api, subscriptionEquivalentUsd=subscription, unclassifiedUsd=unknown, sessions=sessions)
 
 
 def go_limits(response):
@@ -239,17 +218,10 @@ def go_limits(response):
 
 
 def opencode(binary, directory=None):
-    try:
-        modes = auth_modes(read_json(command(binary, ['auth', 'list', '--format', 'json'])))
-    except Exception:
-        modes = {}
-    today = spending(read_json(command(binary, ['stats', '--days', '0', '--cost', '--models', '--json'])), modes)
-    week = spending(read_json(command(binary, ['stats', '--days', '7', '--cost', '--models', '--json'])), modes)
+    modes = auth_modes(read_json(command(binary, ['auth', 'list', '--format', 'json'])))
     kinds = set(modes.values())
     mode = 'mixed' if 'api' in kinds and 'subscription' in kinds else next(iter(kinds)) if len(kinds) == 1 else 'unknown'
-    out = dict(state='ok', mode=mode, authenticated=None, source='opencode stats', spend=dict(today=today, week=week),
-               accounts=[dict(provider=id, mode=mode) for id, mode in modes.items()],
-               note='Local estimates, not invoices. Based on current account types.')
+    out = dict(state='ok', mode=mode, authenticated=bool(modes), source='opencode usage limits', windows=[])
     if 'opencode-go' in modes or 'opencode' in modes:
         from urllib.parse import urlencode
         path = '/api/experimental/usage/limits'

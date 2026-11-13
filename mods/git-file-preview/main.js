@@ -1,13 +1,32 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button, Scrollbar, v_virtual_list, TextView } from "gpui-base";
-import { shared, exec, readTextFile, watchFolder, theme, settings, props } from "herdr";
+import { shared, exec, readTextFile, watchFolder, theme, settings, props, focused, panes } from "herdr";
 import { readDiff, readFile, readMarkdown, isMarkdown } from "./content.js";
 
 export default class FilePreview extends View {
   init(_props, cx) {
     this.selectionKey = props()?.selectionKey || _props?.selectionKey || "git-file-preview.unselected"; this.rows = []; this.mode = "diff"; this.version = 0;
     this.refresh(cx);
-    cx.timer.every(10000, cx => { if (this.selection && !this.selection.hash) this.refresh(cx, true); });
+    cx.timer.every(10000, cx => {
+      if (this.selection && !this.selection.hash) {
+        this.dirty = true;
+        if (this.active()) this.refresh(cx, true);
+      }
+    });
+  }
+
+  active() {
+    const tab = panes().find(pane => pane.pane === this.selection?.sourcePane)?.tab;
+    return !tab || focused()?.tab === tab;
+  }
+
+  affected(paths) {
+    const normalize = path => path.replaceAll("\\", "/").replace(/\/+$/, "");
+    const root = normalize(this.selection.root), file = `${root}/${normalize(this.selection.file.path)}`;
+    return paths.some(path => {
+      path = normalize(path);
+      return path === root || path === file || file.startsWith(path + "/") || path === `${root}/.git` || path.startsWith(`${root}/.git/`);
+    });
   }
 
   watch(root, on, cx) {
@@ -16,8 +35,11 @@ export default class FilePreview extends View {
     cx.spawn(async cx => {
       try {
         while (this.watched === root) {
-          await watchFolder(root);
-          if (this.watched === root && !this.selection?.hash) this.refresh(cx, true);
+          const paths = await watchFolder(root);
+          if (this.watched === root && !this.selection?.hash && this.affected(paths)) {
+            this.dirty = true;
+            if (this.active()) this.refresh(cx, true);
+          }
         }
       } catch { if (this.watched === root) this.watched = null; }
     });
@@ -30,32 +52,48 @@ export default class FilePreview extends View {
       const previous = this.selection;
       const sameFile = previous && previous.root === selection.root && previous.on === selection.on && previous.file.path === selection.file.path && previous.hash === selection.hash && previous.kind === selection.kind && previous.diffMode === selection.diffMode;
       if (!sameFile) this.mode = "diff";
-      this.rows = []; this.markdown = null; this.markdownError = null;
+      this.rows = []; this.result = null; this.markdown = null; this.markdownError = null;
     }
+    let changed = Boolean(this.error);
+    this.dirty = false;
     this.context = context; this.selection = selection; this.error = null; this.loading = true; this.markdownLoading = false;
     const version = ++this.version;
     cx.spawn(async cx => {
       try {
-        const result = await (selection.kind === "file" ? readFile : readDiff)(selection, { exec, readTextFile });
+        const result = await (selection.kind === "file" ? readFile : readDiff)(selection, { exec, readTextFile }, this.result);
         if (version !== this.version) return;
+        if (result === this.result) {
+          if (this.mode === "markdown") await this.loadMarkdown(cx);
+          return;
+        }
+        this.result = result; changed = true;
         this.rows = result.rows; this.truncated = result.truncated; this.syntaxError = result.syntaxError;
         this.diffWidth = Math.max(300, ...this.rows.map(row => (row.text.length + 1) * 7 + 72));
         this.watch(selection.root, selection.on, cx);
-        this.markdown = null;
         if (this.mode === "markdown") await this.loadMarkdown(cx);
-      } catch (error) { if (version === this.version) this.error = String(error); }
-      finally { if (version === this.version) this.loading = false; cx.notify(); }
+        else this.markdown = null;
+      } catch (error) { if (version === this.version) { this.error = String(error); changed = true; } }
+      finally {
+        if (version === this.version) {
+          this.loading = false;
+          if (changed) cx.notify();
+          if (this.dirty && this.active()) this.refresh(cx, true);
+        }
+      }
     });
   }
 
   async loadMarkdown(cx) {
     const version = this.version;
+    let changed = Boolean(this.markdownError);
     this.markdownError = null; this.markdownLoading = true;
     try {
       const result = await readMarkdown(this.selection, { exec, readTextFile });
-      if (version === this.version) this.markdown = result;
-    } catch (error) { if (version === this.version) this.markdownError = String(error); }
-    finally { if (version === this.version) this.markdownLoading = false; cx.notify(); }
+      if (version === this.version && (this.markdown?.text !== result.text || this.markdown?.truncated !== result.truncated || this.markdown?.deleted !== result.deleted)) {
+        this.markdown = result; this.markdownVersion = (this.markdownVersion ?? 0) + 1; changed = true;
+      }
+    } catch (error) { if (version === this.version) { this.markdown = null; this.markdownError = String(error); changed = true; } }
+    finally { if (version === this.version) { this.markdownLoading = false; if (changed) cx.notify(); } }
   }
 
   close() { this.watched = null; }
@@ -82,6 +120,7 @@ export default class FilePreview extends View {
 
   render(cx) {
     if (JSON.stringify(shared(this.selectionKey)) !== this.context) this.refresh(cx);
+    else if (this.dirty && this.active()) this.refresh(cx, true);
     const t = theme(), file = this.selection?.file;
     return v_flex().size_full().min_w(0).min_h(0).bg(t.background).text_color(t.foreground).text_size(12)
       .child(h_flex().h(44).flex_none().px(14).gap(10).items_center().border_b(1).border_color(t.border)
@@ -106,7 +145,7 @@ export default class FilePreview extends View {
         .child(v_flex().id("markdown-document").flex_1().min_h(0).overflow_y_scrollbar().px(28).py(24).items_center()
           .when(!this.markdown, e => e.child(div().w_full().text_color(this.markdownError ? t.ansi1 : t.muted).child(this.markdownError || "Rendering Markdown…")))
           .when(Boolean(this.markdown), e => e.child(div().w_full().max_w(760).font_normal().text_size(15).line_height("24px").font_family(settings().ui_font ?? "Geist")
-            .child(TextView.markdown(`markdown-${this.context}-${this.version}`, this.markdown.text || "*This document is empty.*").selectable(true).scrollable(false).w_full().text_color(t.foreground)))))
+            .child(TextView.markdown(`markdown-${this.context}-${this.markdownVersion}`, this.markdown.text || "*This document is empty.*").selectable(true).scrollable(false).w_full().text_color(t.foreground)))))
         .when(this.markdown?.truncated, e => e.child(div().px(20).py(6).text_color(t.muted).child("Markdown preview limited to the first 200,000 characters"))));
   }
 }

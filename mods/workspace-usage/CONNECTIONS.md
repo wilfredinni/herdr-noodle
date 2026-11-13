@@ -13,9 +13,8 @@ No credentials are copied into Herdr. Re-authenticate using the provider's CLI.
 
 `collect.py` queries existing CLIs in neutral temporary folders, without model prompts.
 Codex uses the documented app-server account and quota APIs. Claude uses the internal
-`get_usage` control interface, which can change between CLI versions. OpenCode reports
-local estimates split by its current configured authentication methods; historical account
-switches can make that split inaccurate. Those numbers are not invoices.
+`get_usage` control interface, which can change between CLI versions. OpenCode reads its
+connections and quota limits without calculating local spending statistics.
 
 Kiro usage comes from `kiro-cli chat --no-interactive /usage --v2`, tested with the
 IAM Identity Center KIRO POWER report. The V2 flag keeps `/usage` in the CLI command
@@ -31,5 +30,4 @@ Reference: https://github.com/nozikov/herdr-usage-limits (MIT). Its separation o
 provider normalization and presentation informed this implementation, particularly Claude's
 `get_usage` approach, credited there to https://github.com/jmalicki/herdr-mod-ai-usage.
 
-The status bar and details panel render quota windows only. Local spending and account
-classification remain connection metadata for other consumers, and are not shown here.
+The status bar and details panel read and render quota windows only.

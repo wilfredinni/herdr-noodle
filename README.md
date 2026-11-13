@@ -22,6 +22,11 @@ Requirements: Herdr **0.1.15** (the tested version), Git, and Python **3.9+**. `
 - A borderless three-line commit area has compact, right-aligned **Commit** and **Generate** controls. Choose a connection, then its available model.
 - The footer shows compact subscription usage meters with consistent green, warning, and red colors.
 
+Working-file previews ignore unrelated folder changes and defer refreshes while their tab is hidden.
+Unchanged source and diffs reuse syntax colors. Files reuses tracked paths while the local Git index
+checksum is unchanged; remote or unreadable indexes keep fresh Git reads. OpenCode usage reads
+connections and quotas without calculating spending statistics.
+
 The preview uses fictional demo content rather than anyone's workspaces, terminal history, credentials, or account usage.
 
 ## Commit behavior

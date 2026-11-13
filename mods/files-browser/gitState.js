@@ -3,12 +3,13 @@ const priority = { A: 1, D: 2, M: 2, U: 3 };
 const merge = (previous, next) => (priority[previous] || 0) >= priority[next] ? previous : next;
 
 export function gitState(root, status = "", tracked = "") {
-  const state = { root: root ? normalize(root) : null, marks: new Map(), tracked: new Set(), ignored: new Set() };
+  const cached = tracked instanceof Set;
+  const state = { root: root ? normalize(root) : null, marks: new Map(), tracked: cached ? tracked : new Set(), ignored: new Set() };
   if (!root) return state;
   const parents = (path, visit) => {
     for (let end = path.lastIndexOf("/"); end > state.root.length; end = path.lastIndexOf("/", end - 1)) visit(path.slice(0, end));
   };
-  for (const relative of tracked.split("\0").filter(Boolean)) {
+  for (const relative of cached ? [] : tracked.split("\0").filter(Boolean)) {
     const path = normalize(`${state.root}/${relative}`);
     state.tracked.add(path); parents(path, path => state.tracked.add(path));
   }

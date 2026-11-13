@@ -23,9 +23,6 @@ export async function readConnection(connection, machine = null, directory = nul
     if (typeof window.label !== "string" || !finite(window.usedPercent) || window.usedPercent > 100 || (window.resetsAt != null && !finite(window.resetsAt)))
       throw new Error("Invalid subscription quota");
   }
-  if (data.spend && (!data.spend.today || !data.spend.week)) throw new Error("Incomplete cost estimate");
-  for (const period of Object.values(data.spend ?? {})) for (const field of ["apiEstimateUsd", "subscriptionEquivalentUsd", "unclassifiedUsd"])
-    if (period[field] != null && !finite(period[field])) throw new Error("Invalid cost estimate");
   return { ...data, connectionId: connection.id, machine, directory, authRef: connection.authRef };
 }
 

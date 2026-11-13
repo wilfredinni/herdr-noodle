@@ -306,8 +306,7 @@ export default class Changes extends View {
     this.note = null; cx.notify();
   }
 
-  fileCheckbox(id, checked, label, change, t, mixed = false) {
-    const disabled = this.busy || this.loading || !this.files.length || this.context !== key();
+  fileCheckbox(id, checked, label, change, t, mixed, disabled) {
     return div().size(22).flex_none().flex().items_center().justify_center().tooltip(label)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_mouse_up("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => cx.stop_propagation())
       .child(Checkbox.new(id).size(14).p(0).flex().items_center().justify_center().rounded(3).border_1()
@@ -361,11 +360,13 @@ export default class Changes extends View {
   }
 
   render(cx) {
-    if (key() !== this.context) this.refresh(cx);
+    const current = key() === this.context;
+    if (!current) this.refresh(cx);
     const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
     const selectedCount = this.files.filter(f => f.staged).length;
-    const hasMessage = Boolean(this.files.length && this.message.trim() && this.root && this.context === key());
+    const hasMessage = Boolean(this.files.length && this.message.trim() && this.root && current);
     const enabled = hasMessage && !this.busy && !this.loading;
+    const checkboxDisabled = this.busy || this.loading || !this.files.length || !current;
     return v_flex().id("changes").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => {
         if (e.key === "escape" && this.view !== "changes" && this.selectedCommit) { this.closeDetail(cx); cx.stop_propagation(); }
@@ -403,7 +404,7 @@ export default class Changes extends View {
           .child(div().w(14).text_size(11).text_color(f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : f.status === "U" ? t.ansi1 : t.blocked).child(f.status))
           .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(260).min_w(0).truncate().text_color(f.status === "D" ? t.muted : t.foreground).when(f.status === "D", el => el.line_through()).child(name)))
           .when(f.add > 0, (e) => e.child(div().text_size(11).text_color(t.ansi2).child(`+${f.add}`))).when(f.del > 0, (e) => e.child(div().text_size(11).text_color(t.ansi1).child(`−${f.del}`)))
-          .child(this.fileCheckbox(`select-file-${f.path}:${f.fresh ? "untracked" : "tracked"}`, f.staged, `${f.staged && f.unstaged ? "Partially staged" : f.staged ? "Staged" : "Stage"} ${f.path}`, (checked, cx) => this.fileActions.stageFiles([f.path], checked, cx, snapshot), t, f.staged && f.unstaged));
+          .child(this.fileCheckbox(`select-file-${f.path}:${f.fresh ? "untracked" : "tracked"}`, f.staged, `${f.staged && f.unstaged ? "Partially staged" : f.staged ? "Staged" : "Stage"} ${f.path}`, (checked, cx) => this.fileActions.stageFiles([f.path], checked, cx, snapshot), t, f.staged && f.unstaged, checkboxDisabled));
         return this.fileActions.row(f, row, t, cx);
       })).when(!this.files.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading changes…" : this.root ? "No uncommitted changes" : "No folder")))))
         .child(Scrollbar.vertical("changes-list").absolute().inset_0()))

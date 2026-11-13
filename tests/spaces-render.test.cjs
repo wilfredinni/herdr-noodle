@@ -19,24 +19,30 @@ const find = (node, id) => node?.attrs?.id?.[0] === id ? node
 test('space rows count only their own open agents across states and update on render', () => {
   let list = ['working', 'blocked', 'done', 'idle'].map(status => ({ space: 'local', status }));
   list.push({ space: 'remote', status: 'working' });
+  let reads = 0;
   const context = vm.createContext({
     View: class {}, div: element, svg: path => Object.assign(element(), { path }),
-    h_flex: element, v_flex: element, agents: () => list,
-    shared: () => ({}), spaces: () => [],
+    h_flex: element, v_flex: element, agents: () => { reads++; return list; },
+    shared: () => ({}), spaces: () => [], machines: () => [],
   });
   const source = fs.readFileSync(__dirname + '/../mods/spaces-paths/main.js', 'utf8')
     .replace(/^import .*;\n/gm, '').replace(/export function /g, 'function ')
     .replace('export default class Spaces', 'globalThis.Spaces = class Spaces');
   vm.runInContext(source, context);
   const view = new context.Spaces();
-  view.pressed = null;
-  const countRow = id => find(view.row({ w: { id, name: id }, i: 0 }, {}), `space-agents-${id}`);
+  view.pressed = null; view.machines = []; view.reconnecting = {};
+  view.ordered = () => ['local', 'remote', 'empty'].map((id, i) => ({ w: { id, name: id }, i }));
+  let rows = view.grouped({}, false);
+  const countRow = id => rows.map(row => find(row, `space-agents-${id}`)).find(Boolean);
   const local = countRow('local');
   assert.equal(local.nodes[0].path, 'icons/agent.svg');
   assert.equal(local.nodes[1], '4');
   assert.equal(local.attrs.accessibility_label[0], '4 open agents');
   assert.equal(countRow('remote').nodes[1], '1');
   assert.equal(countRow('empty').nodes[1], '0');
+  assert.equal(reads, 1);
   list = list.filter(agent => agent.space !== 'local');
+  rows = view.grouped({}, false);
   assert.equal(countRow('local').nodes[1], '0');
+  assert.equal(reads, 2);
 });
