@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "prototypes/git-workspace.html"
+        ],
+        "createdAt": "2026-11-13T16:30:27.998Z",
+        "reason": "Agent: verified wrapper false positives. git-panel content is inset by repo-heading (14px), git-scroll rows (13px), and commit-box (10px); generate-split text is inset by its 28px child buttons; dialog content is inset by dialog-head (17px) and dialog-body (19px). Preserve compact Herdr controls."
+      }
+    ]
+  }
+}

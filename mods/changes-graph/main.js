@@ -6,8 +6,9 @@ import { GitToolbar } from "./gitToolbar.js";
 import { showGitError } from "./gitError.js";
 import { FileActions } from "./fileActions.js";
 import { CommitGenerator } from "./commitGenerator.js";
+import { Repositories } from "./repositories.js";
 
-function location() {
+function sourceLocation() {
   const space = spaces().find((s) => s.active), f = focused();
   const all = panes(), active = f?.pane ? all.find(p => p.pane === f.pane) : null;
   const selection = active?.mod === "git-file-preview" ? shared(`git-file-preview.${f.tab}`) : null;
@@ -15,12 +16,22 @@ function location() {
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
 }
+function workspace(source = sourceLocation()) {
+  const space = spaces().find(s => s.active);
+  return { id: space?.id, folder: source.cwd, on: source.on };
+}
+function location() {
+  const source = sourceLocation(), w = workspace(source), selected = shared(`git.repository.${w.id}`);
+  return { cwd: selected?.workspace === w.folder && selected?.on === w.on && typeof selected?.root === "string" ? selected.root : source.cwd, on: source.on };
+}
 const key = () => JSON.stringify(location());
+const draftKey = (root, on) => JSON.stringify({ root, on });
 // Reads write nothing under .git (no index refresh or lock, no fsmonitor cookie):
 // the folder watch would see it, and every refresh would start the next one.
 const READ = ["--literal-pathspecs", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
 export default class Changes extends View {
   init(_props, cx) {
+    this.drafts = new Map(); this.repositories = new Repositories(this, workspace, cx);
     this.view = "changes"; this.graph = []; this.graphError = null; this.selectedCommit = null; this.detail = null; this.detailError = null;
     this.history = []; this.historyError = null; this.historyLoading = false;
     this.files = []; this.message = ""; this.messageRevision = 0; this.generator = new CommitGenerator(this, key, cx); this.handle = cx.focus_handle();
@@ -35,6 +46,7 @@ export default class Changes extends View {
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     this.refresh(cx);
+    this.repositories.refresh(cx);
     cx.timer.every(10000, (cx) => this.refresh(cx));
   }
 
@@ -54,22 +66,25 @@ export default class Changes extends View {
   refresh(cx) {
     if (this.loading || this.busy) return;
     const { cwd, on } = location(), context = key();
+    const changedContext = context !== this.context;
     if (context !== this.context) {
+      if (this.root) this.drafts.set(draftKey(this.root, this.on), this.message);
       this.selectedCommit = null; this.detail = null; this.detailError = null;
       this.graph = []; this.graphError = null; this.graphContext = null; this.graphLoading = false;
       this.history = []; this.historyError = null; this.historyLoading = false; this.historyVersion = (this.historyVersion ?? 0) + 1;
       this.context = context; this.root = null; this.files = []; this.open = null;
       this.branch = null; this.head = ""; this.gitToolbar.reset();
       this.fileActions.reset(); this.historyPath = null;
-      this.message = ""; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.limited = false;
+      this.message = ""; this.messageRevision++; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.limited = false;
     }
     if (!cwd) return;
+    const revision = this.messageRevision;
     this.loading = true;
     cx.spawn(async (cx) => {
       try {
         const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
         if (key() !== context) return;
-        if (top.code !== 0) { this.selectedCommit = null; this.detail = null; this.graph = []; this.graphError = null; this.history = []; this.historyError = null; this.root = null; this.branch = null; this.head = ""; this.files = []; this.open = null; this.error = "Not a git repository"; return; }
+        if (top.code !== 0) { this.selectedCommit = null; this.detail = null; this.graph = []; this.graphError = null; this.history = []; this.historyError = null; this.root = null; this.branch = null; this.head = ""; this.files = []; this.open = null; this.error = "Select a repository above, or open a Git folder"; return; }
         const root = top.stdout.trim(), git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
         const status = await git(["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]);
         if (status.code !== 0) throw new Error(status.stderr);
@@ -100,6 +115,10 @@ export default class Changes extends View {
         this.root = root; this.on = on; this.hasHead = head.code === 0; this.files = files; this.limited = entries.length > 1000; this.error = null;
         this.branch = branch.code === 0 ? branch.stdout.trim().replace(/^refs\/heads\//, "") : null;
         this.head = head.code === 0 ? head.stdout.trim() : "";
+        if (changedContext && revision === this.messageRevision) {
+          this.message = this.drafts.get(draftKey(root, on)) || ""; this.messageRevision++; this.input.set_value(this.message);
+        }
+        this.repositories.update(root, this.branch, files);
         this.watch(root, cx);
         if (this.view === "graph") await this.loadGraph(context);
         if (this.view === "history") await this.loadHistory(context);
@@ -360,6 +379,7 @@ export default class Changes extends View {
   }
 
   render(cx) {
+    this.repositories.refresh(cx);
     const current = key() === this.context;
     if (!current) this.refresh(cx);
     const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
@@ -372,6 +392,7 @@ export default class Changes extends View {
         if (e.key === "escape" && this.view !== "changes" && this.selectedCommit) { this.closeDetail(cx); cx.stop_propagation(); }
         if (e.key === "escape" && this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); }
       })
+      .child(this.repositories.render(t, cx))
       .child(h_flex().h(42).flex_none().px(10).gap(8).items_center().border_b(1).border_color(t.border)
         .child(Tabs.new("git-views").h_flex().flex_none().h(30).p(2).gap(2).rounded(6).bg(t.raised)
           .children(["changes", "history", "graph"].map(view => div().w(28).h(26).flex_none().tooltip(view === "changes" ? "Changes" : view === "history" ? "History" : "Git Graph").child(Tab.new(`git-view-${view}`).w(28).h(26).items_center().justify_center().rounded(4)
@@ -412,6 +433,7 @@ export default class Changes extends View {
       .when(Boolean(this.note), (e) => e.child(div().px(10).pb(8).text_size(11).text_color(t.ansi1).child(this.note)))
       .child(this.gitToolbar.render(t, cx))
       .child(v_flex().flex_none().p(10).gap(8).border_t(1).border_color(t.border).bg(t.canvas)
+        .child(div().truncate().text_size(11).text_color(t.muted).tooltip(this.root || "").child(this.root ? `Commit to ${this.root.split(/[\\/]/).filter(Boolean).pop()} / ${this.branch || "detached HEAD"}` : "Select a repository to commit"))
         .child(div().id("commit-message").w_full().min_w(0).px(4).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .child(Textarea.new(this.input).w_full().h(54).text_size(12).line_height("18px").text_color(t.foreground).accessibility_label("Commit message")))
         .child(h_flex().w_full().items_center().justify_end().gap(8)
