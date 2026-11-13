@@ -16,7 +16,7 @@ Requirements: Herdr **0.1.15** (the tested version), Git, and Python **3.9+**. `
 
 ![Noodle layout](preview.png)
 
-- Spaces show their folder below the name, beside a two-line initial avatar.
+- Spaces show a robot icon and their open-agent count below the name, beside a two-line initial avatar.
 - Files have Git status colors and file-type icons. Files, diffs, and rendered Markdown open beside your terminal.
 - Changes, History, and Git Graph share one panel. Select files, review diffs, create or switch branches, and use the Fetch menu.
 - A borderless three-line commit area has compact, right-aligned **Commit** and **Generate** controls. Choose a connection, then its available model.

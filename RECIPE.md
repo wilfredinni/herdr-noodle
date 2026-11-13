@@ -1,6 +1,6 @@
 # Noodle
 
-A compact coding workspace with space paths in the sidebar, a separate agents list, a Git-aware file browser, and one panel for Changes, History, and Git Graph. A three-line commit area uses small matching Commit and Generate buttons, while the bottom bar shows subscription usage through the person's existing CLI connections. The preview is a native Herdr capture with fictional demo content.
+A compact coding workspace with per-space agent counts in the sidebar, a separate agents list, a Git-aware file browser, and one panel for Changes, History, and Git Graph. A three-line commit area uses small matching Commit and Generate buttons, while the bottom bar shows subscription usage through the person's existing CLI connections. The preview is a native Herdr capture with fictional demo content.
 
 ![Noodle](preview.png)
 
@@ -8,7 +8,7 @@ A compact coding workspace with space paths in the sidebar, a separate agents li
 
 - The window has no system title bar. On macOS, reserve traffic-light space at `[12, 16]`. Use Herdr's Paper theme in light appearance and Graphite in dark appearance; use theme names for surfaces and colors. Keep the person's UI and terminal fonts rather than shipping a global settings file.
 - A 268 px sidebar, minimum 44 and maximum 480, has a 46 px brand row, resizable Spaces and Agents regions, and a 69 px Settings/Add machine footer. Spaces and Agents have a 90 px minimum each. This exported arrangement uses weights 1.20968 and 0.7903201.
-- Space rows show a 32 px rounded initial avatar beside the name and a second, smaller path line. Local home paths abbreviate to `~`. The narrow sidebar becomes a rail. Machine and worktree groups follow Herdr's existing spaces model.
+- Space rows show a 32 px rounded initial avatar beside the name and a second, smaller line with the shipped robot icon (`icons/agent.svg`) and the number of open agents in that space, including idle agents and zero. The narrow sidebar becomes a rail. Machine and worktree groups follow Herdr's existing spaces model.
 - The main work column has a 42 px tab strip and a work area with 8 px outer padding and gaps. Terminal panes have a 30 px header, 10 px corners, a one-pixel border that becomes the accent color when focused, and terminal padding `[14, 12]`. Frame a single pane too.
 - A right panel, exported at 498 px wide with bounds 280–900, contains a Files/Changes stack. Show Changes initially; the tab bar toggles Files and Changes. Preserve the stable node IDs used by those controls.
 - Files use 28 px tree rows, file-type/folder icons, and Git colors. Source and diff previews use a monospace font, line numbers, inline change gutters, and optional syntax colors. Markdown has Source/Diff and Preview modes, with a centered rendered document no wider than 760 px.
@@ -91,7 +91,7 @@ Runtime programs are Git, Python 3, platform shell tools (`sh`, or Windows Power
 
 1. `herdr-app check` passes for every included mod; switching to `noodle` shows the layout without runtime errors.
 2. A fresh configuration install creates only the layout/preview and six mods. A conflicting name leaves all existing files untouched.
-3. The sidebar displays paths below names with a 32 px avatar; native agent working/blocked/done/idle states remain distinct.
+3. The sidebar displays a robot icon and live open-agent counts below names with a 32 px avatar; native agent working/blocked/done/idle states remain distinct.
 4. Files opens source and Markdown. Changes and History/Graph open the same diff component. Source and diff content remain bounded and the active repository follows the original terminal.
 5. In a disposable Git repository, checked files commit only staged content; an unchecked set commits all current new/modified/deleted files; partially staged hunks remain intact.
 6. History has no ref badges, Graph does, and creating a valid missing branch does not reset existing branches or overwrite dirty files.

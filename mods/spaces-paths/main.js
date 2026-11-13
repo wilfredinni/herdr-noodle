@@ -1,11 +1,12 @@
 // Workspace spaces: stable colored avatars, worktrees under their checkout,
 // grouped by machine when more than one is known. After a space's name, the repo
-// its first terminal is in now, only where unusual: branch, ahead/behind. Agent state lives in the agents list, not here. Click to
+// its first terminal is in now, only where unusual: branch, ahead/behind. The
+// second line counts open agents; their state lives in the agents list. Click to
 // switch, right-click for its menu, drag to reorder.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, home } from "herdr";
+import { spaces, machines, agents, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -386,10 +387,7 @@ export default class Spaces extends View {
 
   row({ w, i, g, tree }, t) {
     const on = w.active;
-    const folder = place(w, panes()) ?? "";
-    const userHome = home();
-    const pathLabel = !w.machine && (folder === userHome || folder.startsWith(`${userHome}/`))
-      ? `~${folder.slice(userHome.length)}` : folder;
+    const count = agents().filter(agent => agent.space === w.id).length;
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
     const colors = shared("space.colors") ?? {};
     const color = colors[w.id] ?? "ansi6";
@@ -444,7 +442,10 @@ export default class Spaces extends View {
             .child(h_flex().gap(5).items_center()
               .child(div().min_w(0).max_w(150).truncate().tooltip(w.name).text_color(t.foreground).child(w.name))
               .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()))
-            .child(div().min_w(0).truncate().tooltip(folder).text_size(11).text_color(t.muted).child(pathLabel))),
+            .child(h_flex().id(`space-agents-${w.id}`).gap(5).items_center().text_size(11).text_color(t.muted)
+              .tooltip(`${count} open agents`).accessibility_label(`${count} open agents`)
+              .child(svg("icons/agent.svg").size(12).flex_none())
+              .child(String(count)))),
       );
   }
 
