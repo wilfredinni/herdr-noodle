@@ -117,17 +117,20 @@ export default class WorkspaceUsage extends View {
     const t = theme(), space = spaces().find(space => space.active), list = agents();
     const needs = list.filter(agent => agent.status === "blocked").length;
     const label = (icon, text) => h_flex().gap(6).items_center().child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
-    const visible = CONNECTIONS.map(connection => ({ connection, record: this.record(connection) }))
+    const visible = CONNECTIONS.map(connection => {
+      const record = this.record(connection), windows = record?.good?.windows ?? [];
+      return { connection, record, window: windows.find(window => quotaMeter(window).label === "wk") ?? windows[0] };
+    })
       .filter(item => item.record?.good || item.record?.reading?.installed === true);
     const trigger = Button.new("ai-usage-toggle").h_flex().h(24).flex_none().px(5).gap(12).items_center().rounded(5).bg(this.open ? t.hover : "#00000000").font_normal().text_size(11.5).text_color(t.muted)
       .accessibility_label("AI usage and connections").tooltip("AI usage and connections").hover(el => el.bg(t.hover).text_color(t.foreground))
       .when(!visible.length, el => el.child(this.loading() ? "Reading AI usage…" : "AI usage"))
-      .children(visible.flatMap(({ connection, record }, i) => [
+      .children(visible.flatMap(({ connection, record, window }, i) => [
         ...(i ? [div().w(1).h(12).flex_none().bg(t.border)] : []),
         h_flex().flex_none().gap(8).items_center().tooltip(connection.name).when(stale(record), el => el.opacity(0.55))
           .child(this.icon(connection))
-          .children((record.good?.windows ?? []).map(window => this.compactQuota(connection, window, t)))
-          .when(!record.good?.windows?.length, el => el.child(div().text_color(t.dim).child("—"))),
+          .when(Boolean(window), el => el.child(this.compactQuota(connection, window, t)))
+          .when(!window, el => el.child(div().text_color(t.dim).child("—"))),
       ]));
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
       .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))

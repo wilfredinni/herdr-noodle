@@ -15,7 +15,34 @@ function harness(execOverride){
  return {context,view,cx,calls,timers,render(){inRender=true;try{return view.render(cx);}finally{inRender=false;}},move:m=>machine=m,folder:value=>directory=value,async flush(){while(pending.length)await Promise.all(pending.splice(0));}};
 }
 
-test('compact bar displays every quota window with provider icons and separators',async()=>{const h=harness();await h.flush();const c=h.context.connectionById('opencode');h.view.records.set(h.view.key(c),h.context.mergeReading(null,{...good(),mode:'mixed',windows:[{label:'Go · 5h',usedPercent:4,resetsAt:2000000000,minutes:300},{label:'Go · 7d',usedPercent:20,resetsAt:2000000000,minutes:10080},{label:'Go · month',usedPercent:30,resetsAt:2000000000}]}));const root=find(h.view.render(h.cx),'ai-usage-toggle');const text=texts(root);for(const value of ['5h','wk','mo','4%','20%','30%','69%'])assert.ok(text.includes(value),value);assert.ok(find(root,'icons/codex.svg'));assert.ok(find(root,'icons/opencode.svg'));assert.doesNotMatch(text,/Codex|OpenCode|API|\$/);assert.ok(root.nodes.some(n=>n.attrs?.w?.[0]===1&&n.attrs?.h?.[0]===12));});
+test('footer shows one weekly quota per provider while details retain all windows',async()=>{
+ const h=harness();await h.flush();
+ for(const connection of h.context.CONNECTIONS){
+  const prefix=connection.id==='opencode'?'Go · ':'';
+  h.view.records.set(h.view.key(connection),h.context.mergeReading(null,{...good(),windows:[
+   {label:prefix+'5h',usedPercent:4,resetsAt:2000000000},
+   {label:prefix+'7d',usedPercent:20,resetsAt:2000000000},
+   {label:prefix+'month',usedPercent:30,resetsAt:2000000000},
+  ]}));
+ }
+ const root=find(h.view.render(h.cx),'ai-usage-toggle'),text=texts(root);
+ assert.equal((text.match(/20%/g)||[]).length,h.context.CONNECTIONS.length);
+ assert.doesNotMatch(text,/5h|mo|4%|30%/);
+ assert.ok(find(root,'icons/codex.svg'));assert.ok(find(root,'icons/opencode.svg'));
+ assert.ok(root.nodes.some(n=>n.attrs?.w?.[0]===1&&n.attrs?.h?.[0]===12));
+ h.view.open=true;
+ const details=texts(h.view.details(h.context.theme()));
+ for(const value of ['5h','7d','month','4%','20%','30%'])assert.ok(details.includes(value),value);
+});
+test('footer falls back to the first available quota when no weekly quota exists',async()=>{
+ const h=harness();await h.flush();const c=h.context.CONNECTIONS[0];
+ h.view.records.set(h.view.key(c),h.context.mergeReading(null,{...good(),windows:[
+  {label:'month',usedPercent:31,resetsAt:2000000000},
+  {label:'5h',usedPercent:12,resetsAt:2000000000},
+ ]}));
+ const text=texts(find(h.view.render(h.cx),'ai-usage-toggle'));
+ assert.match(text,/mo/);assert.match(text,/31%/);assert.doesNotMatch(text,/5h|12%/);
+});
 test('green, warning and red thresholds match in compact and detail progress bars',async()=>{const h=harness();await h.flush();const t=h.context.theme(),c=h.context.CONNECTIONS[0];for(const [percent,color] of [[0,'ansi2'],[4,'ansi2'],[69,'ansi2'],[70,'ansi3'],[89,'ansi3'],[90,'ansi1'],[100,'ansi1']]){const w={label:'5h',usedPercent:percent,resetsAt:2000000000,minutes:300};assert.equal(h.view.color(percent,t),color);const compact=h.view.compactQuota(c,w,t),detail=h.view.quota(w,false,t);const compactTrack=compact.nodes[1].nodes[0],detailTrack=detail.nodes[1].nodes[0];if(percent>0){assert.equal(compactTrack.nodes[0].attrs.bg[0],color);assert.equal(detailTrack.nodes[0].attrs.bg[0],color);}else{assert.equal(compactTrack.nodes.length,0);assert.equal(detailTrack.nodes.length,0);}}});
 test('time marker uses known window length and is omitted for unknown monthly duration',async()=>{const h=harness();await h.flush();const now=10000;assert.equal(h.context.quotaMeter({label:'5h',usedPercent:5,resetsAt:now+150*60,minutes:300},now).tick,0.5);assert.equal(h.context.quotaMeter({label:'Go · month',usedPercent:5,resetsAt:now+10000},now).tick,null);assert.equal(h.context.quotaMeter({label:'Go · 7d',usedPercent:5,resetsAt:now+500,minutes:10080},now).label,'wk');});
 test('expired quota shows a dash and never draws a fake zero or filled meter',async()=>{const h=harness();await h.flush();const w={label:'5h',usedPercent:88,resetsAt:100,minutes:300};assert.equal(h.context.quotaMeter(w,200).percent,null);const tree=h.view.compactQuota(h.context.CONNECTIONS[0],w,h.context.theme());assert.match(texts(tree),/—/);assert.doesNotMatch(texts(tree),/0%|88%/);assert.equal(tree.nodes[1].nodes[0].nodes.length,0);});
