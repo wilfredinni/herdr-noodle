@@ -1,0 +1,19 @@
+{
+  "name": "noodle",
+  "testedHerdrVersion": "0.1.15",
+  "mods": [
+    "spaces-paths",
+    "files-browser",
+    "changes-graph",
+    "git-file-preview",
+    "git-error",
+    "workspace-usage"
+  ],
+  "shippedMods": [
+    "workspace-chrome",
+    "agents",
+    "tabs",
+    "pane",
+    "menu"
+  ]
+}

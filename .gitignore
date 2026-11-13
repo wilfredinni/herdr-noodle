@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.pyc
+node_modules/
+.env
+.env.*
+shared.json
+settings.json
+keys.json
+view.json
+installed.json
+window.json
+windows.json
+data/
+layouts/.state/
+*.error
+*.old*
