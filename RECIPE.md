@@ -78,7 +78,7 @@ Runtime programs are Git, Python 3, platform shell tools (`sh`, or Windows Power
 ## Watch out
 
 - Tested against Herdr 0.1.15; use the current installed type declarations when adapting to another release. Generated declarations and editor configuration are intentionally omitted. Never change Herdr's shipped files; these custom folders are personal clones.
-- Never overwrite existing names on someone else's machine. The installer refuses collisions up front. If renaming a mod, change layout references, self-opening overlay names, asset paths, and Python helper paths together.
+- Never overwrite existing names on someone else's machine. The installing agent must resolve collisions before copying files, following the local Herdr `AGENTS.md`. If renaming a mod, change layout references, self-opening overlay names, asset paths, and Python helper paths together.
 - Preserve node IDs (`sidebar`, `spaces`, `agents`, `tabs`, `main`, `panel`, `panel-body`, `files`, `changes`, `status`) because shipped controls address them. Do not copy `shared.json`, workspace documents, click-state files, keys, or global settings.
 - Python 3.9+ is required for usage, generation, ignore helpers, and Trash handling. Remote-machine operations require the relevant programs there too. Trash is implemented for macOS/Linux only. The file browser handles Windows listing, but no complete Windows/remote validation is claimed.
 - History and Graph stop at 200 commits. Changes shows at most 1,000 file rows. Files lists at most 500 entries per folder and 5,000 in total. Source previews are bounded at 5,000 lines/400,000 characters; diff previews at 1,500 lines; Markdown at 200,000 characters. Host file reads have Herdr's own size limit.

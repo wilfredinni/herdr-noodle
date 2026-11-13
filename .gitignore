@@ -15,3 +15,5 @@ data/
 layouts/.state/
 *.error
 *.old*
+mods/**/gpui-kit.d.ts
+mods/**/jsconfig.json
