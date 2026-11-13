@@ -265,10 +265,26 @@ def opencode(binary, directory=None):
     return out
 
 
+def kiro_usage(text):
+    import re
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+    credits = re.search(r'Credits\s*\(([\d,]+(?:\.\d+)?) of ([\d,]+(?:\.\d+)?) covered in plan\)', text)
+    reset = re.search(r'resets on (\d{4}-\d{2}-\d{2})', text)
+    if not credits or not reset:
+        raise ValueError('Unsupported Kiro usage report')
+    used, limit = (float(value.replace(',', '')) for value in credits.groups())
+    if not number(used) or not number(limit) or limit <= 0:
+        raise ValueError('Invalid Kiro credit allowance')
+    from datetime import datetime, timezone
+    resets_at = datetime.strptime(reset[1], '%Y-%m-%d').replace(tzinfo=timezone.utc).timestamp()
+    return dict(state='ok', mode='subscription', authenticated=True, source='kiro-cli /usage --v2',
+                windows=[window('month', min(100, used / limit * 100), resets_at)],
+                note=f'{used:,.2f} of {limit:,.0f} credits used.')
+
+
 def kiro(binary):
-    # shortcut: Kiro's /usage has no stable JSON schema; keep the account link until a tested schema is available.
-    return dict(state='unavailable', mode='unknown', authenticated=None,
-                note='Kiro is installed. Run /usage in Kiro for current credits; no structured usage source is configured.')
+    # shortcut: V2 text reports can change and create empty CLI sessions; use a stateless usage API when Kiro exposes one.
+    return kiro_usage(command(binary, ['chat', '--no-interactive', '/usage', '--v2'], seconds=40))
 
 
 def collect(id, directory=None):

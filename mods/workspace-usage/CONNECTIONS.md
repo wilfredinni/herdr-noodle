@@ -17,9 +17,11 @@ Codex uses the documented app-server account and quota APIs. Claude uses the int
 local estimates split by its current configured authentication methods; historical account
 switches can make that split inaccurate. Those numbers are not invoices.
 
-Kiro is detected, but has no verified structured usage adapter here. Its `/usage` command
-and official account usage page remain the source for credits until a tested adapter exists.
-This limitation must be shown in the UI. No synthetic zeroes or quota reset values.
+Kiro usage comes from `kiro-cli chat --no-interactive /usage --v2`, tested with the
+IAM Identity Center KIRO POWER report. The V2 flag keeps `/usage` in the CLI command
+handler. Monthly usage uses the reported credits and reset date; unsupported reports
+fail without inventing zeroes. This text interface can change, and Kiro may save an
+empty session per refresh. Authentication stays managed by Kiro.
 
 Usage is fetched every five minutes, separately for the active machine. Failed reads retain
 clearly dated last-good values; removed or signed-out connections clear them. Past quota

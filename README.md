@@ -34,7 +34,7 @@ Only Generate spins during generation. Fetch spins for actions from Fetch and it
 
 ## Connections and access
 
-Usage reads the CLI sign-ins for Codex, Claude, OpenCode, and Kiro. Missing installations are grouped at the end of the usage popup. Kiro currently has **no structured quota adapter**; Claude's internal usage interface can change. API estimates and account classification are not displayed.
+Usage reads the CLI sign-ins for Codex, Claude, OpenCode, and Kiro. Missing installations are grouped at the end of the usage popup. Kiro reads monthly credits and the reset date through its V2 `/usage` command, tested with an IAM Identity Center KIRO POWER account. Its text format and Claude's internal usage interface can change. Kiro may save an empty CLI session per refresh. API estimates and account classification are not displayed.
 
 Commit generation supports native Codex and the connected model providers exposed by OpenCode, including **OpenCode Go**. It discovers models instead of bundling a fixed catalog, remembers the selection, and does not silently switch accounts or models. Claude and Kiro generation adapters are not implemented. Tested with Codex CLI **0.167.2** and OpenCode **2.2.7**; provider interfaces and quota availability depend on the installed CLI version.
 
