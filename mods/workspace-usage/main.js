@@ -39,7 +39,8 @@ export default class WorkspaceUsage extends View {
         } finally { this.pending.delete(key); cx.notify(); }
       });
     }
-    cx.notify();
+    // Context changes already render this state; notify only for explicit refreshes.
+    if (!cached) cx.notify();
   }
 
   icon(connection, size = 13) {
