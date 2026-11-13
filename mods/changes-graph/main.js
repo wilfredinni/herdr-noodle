@@ -7,6 +7,7 @@ import { showGitError } from "./gitError.js";
 import { FileActions } from "./fileActions.js";
 import { CommitGenerator } from "./commitGenerator.js";
 import { Repositories } from "./repositories.js";
+import { StashPanel } from "./stashPanel.js";
 
 function sourceLocation() {
   const space = spaces().find((s) => s.active), f = focused();
@@ -29,15 +30,20 @@ const draftKey = (root, on) => JSON.stringify({ root, on });
 // Reads write nothing under .git (no index refresh or lock, no fsmonitor cookie):
 // the folder watch would see it, and every refresh would start the next one.
 const READ = ["--literal-pathspecs", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
+function upstreamState(status) {
+  const header = status.split("\0", 1)[0], match = /^## .+?\.\.\.(.+?)(?: \[([^\]]+)\])?$/.exec(header);
+  if (!match || match[2] === "gone") return null;
+  return { upstream: match[1], ahead: Number(/ahead (\d+)/.exec(match[2] || "")?.[1] || 0), behind: Number(/behind (\d+)/.exec(match[2] || "")?.[1] || 0) };
+}
 export default class Changes extends View {
   init(_props, cx) {
     this.drafts = new Map(); this.repositories = new Repositories(this, workspace, cx);
     this.view = "changes"; this.graph = []; this.graphError = null; this.selectedCommit = null; this.detail = null; this.detailError = null;
     this.history = []; this.historyError = null; this.historyLoading = false;
     this.files = []; this.message = ""; this.messageRevision = 0; this.generator = new CommitGenerator(this, key, cx); this.handle = cx.focus_handle();
-    this.branch = null; this.head = ""; this.gitToolbar = new GitToolbar(this, key, cx);
-    this.fileActions = new FileActions(this, key, cx); this.historyPath = null;
-    this.input = TextareaState.new({ placeholder: "Commit message", rows: 3 });
+    this.branch = null; this.head = ""; this.sync = null; this.gitToolbar = new GitToolbar(this, key, cx);
+    this.fileActions = new FileActions(this, key, cx); this.stash = new StashPanel(this); this.historyPath = null; this.collapsed = {};
+    this.input = TextareaState.new({ placeholder: "Write a commit message…", rows: 3 });
     this.input.on("change", (_e, cx) => {
       const hadMessage = Boolean(this.message.trim());
       this.message = this.input.value(); this.messageRevision++;
@@ -73,8 +79,8 @@ export default class Changes extends View {
       this.graph = []; this.graphError = null; this.graphContext = null; this.graphLoading = false;
       this.history = []; this.historyError = null; this.historyLoading = false; this.historyVersion = (this.historyVersion ?? 0) + 1;
       this.context = context; this.root = null; this.files = []; this.open = null;
-      this.branch = null; this.head = ""; this.gitToolbar.reset();
-      this.fileActions.reset(); this.historyPath = null;
+      this.branch = null; this.head = ""; this.sync = null; this.gitToolbar.reset();
+      this.fileActions.reset(); this.stash.reset(); this.historyPath = null; this.collapsed = {};
       this.message = ""; this.messageRevision++; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.limited = false;
     }
     if (!cwd) return;
@@ -85,13 +91,13 @@ export default class Changes extends View {
         const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
         if (key() !== context) return;
         if (top.code !== 0) {
-          this.selectedCommit = null; this.detail = null; this.graph = []; this.graphError = null; this.history = []; this.historyError = null; this.root = null; this.branch = null; this.head = ""; this.files = []; this.open = null;
+          this.selectedCommit = null; this.detail = null; this.graph = []; this.graphError = null; this.history = []; this.historyError = null; this.root = null; this.branch = null; this.head = ""; this.sync = null; this.files = []; this.open = null;
           this.error = this.repositories.rows.length > 1 ? "Select a repository above" : "No Git repository found in this folder";
           if (this.repositories.rows.length === 1 && this.repositories.rows[0].root !== cwd) this.repositories.choose(this.repositories.rows[0], cx);
           return;
         }
         const root = top.stdout.trim(), git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
-        const status = await git(["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]);
+        const status = await git(["status", "--porcelain=v1", "-z", "--branch", "--no-renames", "--untracked-files=all"]);
         if (status.code !== 0) throw new Error(status.stderr);
         const head = await git(["rev-parse", "--verify", "HEAD"]);
         const branch = await git(["symbolic-ref", "--quiet", "HEAD"]);
@@ -108,7 +114,7 @@ export default class Changes extends View {
           }
         }
         const files = [];
-        const entries = status.stdout.split("\0").filter(Boolean);
+        const entries = status.stdout.split("\0").filter(entry => entry && !entry.startsWith("## "));
         for (const entry of entries) {
           const xy = entry.slice(0, 2), path = entry.slice(3), fresh = xy === "??";
           const conflict = xy.includes("U") || xy === "AA" || xy === "DD";
@@ -120,13 +126,15 @@ export default class Changes extends View {
         this.root = root; this.on = on; this.hasHead = head.code === 0; this.files = files; this.limited = entries.length > 1000; this.error = null;
         this.branch = branch.code === 0 ? branch.stdout.trim().replace(/^refs\/heads\//, "") : null;
         this.head = head.code === 0 ? head.stdout.trim() : "";
+        this.sync = upstreamState(status.stdout);
         if (changedContext && revision === this.messageRevision) {
           this.message = this.drafts.get(draftKey(root, on)) || ""; this.messageRevision++; this.input.set_value(this.message);
         }
-        this.repositories.update(root, this.branch, files);
+        this.repositories.update(root, this.branch, files, this.sync);
         this.watch(root, cx);
         if (this.view === "graph") await this.loadGraph(context);
         if (this.view === "history") await this.loadHistory(context);
+        if (this.view === "stashes") await this.stash.refresh();
         if (this.open && !files.some((f) => f.path === this.open)) this.open = null;
       } catch (e) { if (key() === context) this.error = String(e); }
       finally { this.loading = false; cx.notify(); }
@@ -174,6 +182,7 @@ export default class Changes extends View {
       const context = this.context;
       if (view === "graph") cx.spawn(async cx => { await this.loadGraph(context); cx.notify(); });
       if (view === "history") cx.spawn(async cx => { await this.loadHistory(context); cx.notify(); });
+      if (view === "stashes") cx.spawn(async cx => { await this.stash.refresh(); cx.notify(); });
     }
     cx.notify();
   }
@@ -200,7 +209,7 @@ export default class Changes extends View {
         if (key() === context && this.selectedCommit === row.fullHash) {
           this.detail = commitDetail(metadata, statuses, stats);
           const file = this.detail.files.find(file => file.path === this.historyPath) || this.detail.files[0];
-          if (this.view === "history" && file) this.openFile(file, this.detail, cx);
+          if (file) this.openFile(file, this.detail, cx);
         }
       } catch (error) { if (key() === context && this.selectedCommit === row.fullHash) this.detailError = String(error); }
       cx.notify();
@@ -267,29 +276,31 @@ export default class Changes extends View {
             const color = ref.kind === "tag" ? t.ansi3 : ref.kind === "branch" ? t.ansi2 : t.ansi4;
             return h_flex().h(16).max_w(150).min_w(0).flex_none().tooltip(ref.name).px(4).gap(3).items_center().rounded(3).border_1().border_color(color)
               .bg(ref.kind === "current" ? color : t.background).text_color(ref.kind === "current" ? t.background : color)
-              .font_family(settings().font_family ?? "JetBrains Mono").text_size(10)
+              .font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
               .child(svg(`mods/changes-graph/${ref.kind}.svg`).size(10).flex_none())
               .child(div().min_w(0).truncate().child(ref.name));
           }))))
         .child(div().flex_1().min_w(0).truncate().text_color(merge ? t.muted : t.foreground).child(row.subject)))
       .child(div().w(32).flex_none().text_right().text_color(t.muted).child(shortAge(row.timestamp)))
       .child(div().w(100).flex_none().truncate().text_color(t.muted).child(row.author))
-      .child(div().w(66).flex_none().font_family(settings().font_family ?? "JetBrains Mono").text_size(10).text_color(t.muted).child(row.hash));
+      .child(div().w(66).flex_none().font_family(settings().font_family ?? "JetBrains Mono").text_size(11).text_color(t.muted).child(row.hash));
   }
 
   graphView(t, history = false) {
     const rows = history ? this.history : this.graph, count = rows.length;
     const error = history ? this.historyError : this.graphError, loading = history ? this.historyLoading : this.graphLoading;
-    const id = history ? "git-history" : "git-graph";
-    const scope = history ? this.historyPath || this.branch || "HEAD" : "all branches";
+    const id = history ? "git-history" : "git-graph", scope = history ? this.historyPath || this.branch || "HEAD" : "all branches";
     const width = history ? 0 : Math.max(38, ...rows.map(row => row.lanes * 12 + 12));
-    const empty = error || this.error || (!this.root ? "No folder" : loading || this.loading
-      ? history ? "Loading history…" : "Loading Git graph…"
-      : history && this.historyPath ? "No commits for this file" : "No commits yet");
+    const empty = error || this.error || (!this.root ? "Open a Git folder" : loading || this.loading ? "Loading history…" : "No commits yet");
     return v_flex().flex_1().min_h(0)
+      .when(history && Boolean(this.historyPath), el => el.child(h_flex().h(32).px(14).gap(8).flex_none().items_center().border_b(1).border_color(t.border)
+        .child(svg("mods/changes-graph/file.svg").size(13).text_color(t.muted))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).tooltip(this.historyPath).child(this.historyPath))
+        .child(Button.new("clear-file-history").size(24).flex().items_center().justify_center().rounded(4).bg("#00000000").text_color(t.muted)
+          .accessibility_label("Show all history").on_click((_e, cx) => { this.historyPath = null; this.selectView("history", cx); }).child(svg("mods/pane/close.svg").size(12)))))
       .child(div().flex_1().min_h(0).relative()
         .child(div().id(`${id}-x`).absolute().inset_0().overflow_x_scroll()
-          .child(v_flex().w_full().min_w(history ? 500 : 560).h_full()
+          .child(v_flex().w_full().min_w(history ? 500 : Math.max(560, width + 440)).h_full()
             .child(h_flex().h(24).flex_none().px(8).gap(8).items_center().border_b(1).border_color(t.border).text_size(11).text_color(t.muted)
               .when(!history, el => el.child(div().w(width).flex_none().child("Graph")))
               .child(div().flex_1().min_w(0).child("Description"))
@@ -298,22 +309,17 @@ export default class Changes extends View {
               .child(div().w(66).flex_none().child("Commit")))
             .child(div().flex_1().min_h(0).relative()
               .child(v_flex().id(`${id}-list`).absolute().inset_0().overflow_y_scroll()
-                .when(!history && this.files.length > 0, el => el.child(Button.new("graph-uncommitted").h_flex().w_full().h(GRAPH_ROW_HEIGHT).flex_none().px(8).gap(8).items_center().text_size(12).text_color(t.muted).cursor_pointer()
+                .when(!history && this.files.length > 0, el => el.child(Button.new("graph-uncommitted").h_flex().h(24).px(14).gap(8).flex_none().items_center().bg("#00000000").text_size(12).text_color(t.muted)
                   .accessibility_label(`Show ${this.files.length} uncommitted changes`).hover(e => e.bg(t.hover)).on_click((_e, cx) => this.selectView("changes", cx))
-                  .child(div().w(width).h(GRAPH_ROW_HEIGHT).flex_none().relative()
-                    .child(div().absolute().left(5).top(GRAPH_ROW_HEIGHT / 2 - 3).size(6).rounded_full().border_1().border_color(t.muted)))
-                  .child(div().flex_1().min_w(0).truncate().child(`Uncommitted changes (${this.files.length})`))
-                  .child(div().w(32).flex_none().text_right().child("*"))
-                  .child(div().w(100).flex_none().child("*"))
-                  .child(div().w(66).flex_none().text_size(10).child("*"))))
+                  .child(svg("mods/changes-graph/changes.svg").size(14)).child(`Uncommitted changes (${this.files.length})`)))
                 .children(rows.map(row => this.graphRow(row, width, t)))
-                .when(!rows.length, el => el.child(div().p(14).text_color(t.muted).child(empty))))
+                .when(!rows.length, el => el.child(div().p(14).text_size(12).text_color(t.muted).child(empty))))
               .child(Scrollbar.vertical(`${id}-list`).absolute().inset_0()))))
         .child(Scrollbar.horizontal(`${id}-x`).absolute().inset_0()))
       .when(Boolean(this.selectedCommit), el => el.child(this.commitView(t)))
-      .when(Boolean(error) && rows.length > 0, el => el.child(div().px(12).py(6).text_color(t.ansi1).child(error)))
-      .child(div().px(12).py(8).border_t(1).border_color(t.border).text_size(11).text_color(t.muted)
-        .child(count >= GRAPH_LIMIT ? `Latest ${GRAPH_LIMIT} commits · ${scope}` : `${count} commits · ${scope}`));
+      .when(Boolean(error) && rows.length > 0, el => el.child(div().px(14).py(8).text_size(12).text_color(t.ansi1).child(error)))
+      .when(!history, el => el.child(div().px(14).py(8).border_t(1).border_color(t.border).text_size(11).text_color(t.muted)
+        .child(count >= GRAPH_LIMIT ? `Latest ${GRAPH_LIMIT} commits · ${scope}` : `${count} commits · ${scope}`)));
   }
 
   openFile(file, commit, cx, options = {}) {
@@ -326,7 +332,7 @@ export default class Changes extends View {
     setShared(selectionKey, { root: this.root, on: this.on, file, hash: commit?.hash ?? null, parent: commit?.parents[0] ?? null, hasHead: this.hasHead, sourcePane: source.pane, ...options });
     if (existing) run("pane.focus", { pane: existing.pane });
     else run("pane.split", { pane: source.pane, direction: "right", mod: "git-file-preview", props: { selectionKey } });
-    if (!commit) this.open = file.path;
+    if (!commit) { this.open = file.path; this.openMode = options.diffMode || "all"; }
     this.note = null; cx.notify();
   }
 
@@ -339,6 +345,41 @@ export default class Changes extends View {
         .when(disabled, el => el.opacity(0.5)).on_change((value, cx) => { cx.stop_propagation(); change(value, cx); })
         .when(checked && !mixed, el => el.child(svg("mods/workspace-chrome/check.svg").size(10)))
         .when(mixed, el => el.child(div().w(7).h(1.5).bg(t.accent_foreground))));
+  }
+
+  changeRows(t, cx, disabled) {
+    const snapshot = this.fileActions.snapshot(), files = this.files.slice(0, 1000);
+    const groups = [["staged", "Staged changes", files.filter(file => file.staged && file.status !== "U")],
+      ["unstaged", "Changes", files.filter(file => file.unstaged ?? !file.staged)]];
+    return v_flex().gap(2)
+      .when(this.files.some(file => file.status === "U"), el => el.child(h_flex().px(8).py(10).gap(8).text_size(12).text_color(t.ansi1)
+        .child(svg("mods/changes-graph/warning.svg").size(14).flex_none())
+        .child(div().child("Resolve conflicts in your editor, then stage the resolved files before committing."))))
+      .children(groups.filter(([, , entries]) => entries.length).map(([mode, title, entries]) => v_flex().flex_none()
+        .child(h_flex().h(30).flex_none().items_center().gap(4)
+          .child(Button.new(`toggle-${mode}`).h_flex().flex_1().min_w(0).h(28).px(8).gap(7).items_center().justify_start().bg("#00000000").text_size(11).font_normal().text_color(t.muted)
+            .accessibility_label(`${this.collapsed[mode] ? "Expand" : "Collapse"} ${title}`).focus(el => el.border_color(t.accent))
+            .on_click((_e, cx) => { this.collapsed[mode] = !this.collapsed[mode]; cx.notify(); })
+            .child(svg(`mods/changes-graph/${this.collapsed[mode] ? "expand" : "chevron"}.svg`).size(10))
+            .child(div().font_semibold().child(title)).child(div().child(String(entries.length))))
+          .child(Button.new(`stage-group-${mode}`).size(28).flex_none().flex().items_center().justify_center().rounded(4).bg("#00000000").text_color(t.muted)
+            .disabled(disabled).accessibility_label(mode === "staged" ? "Unstage all staged files" : "Stage all working changes").tooltip(mode === "staged" ? "Unstage all" : "Stage all")
+            .hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent)).on_click((_e, cx) => this.fileActions.stageFiles(entries.map(file => file.path), mode !== "staged", cx, snapshot))
+            .child(svg(`mods/changes-graph/${mode === "staged" ? "minus" : "plus"}.svg`).size(13))))
+        .when(!this.collapsed[mode], el => el.children(entries.map(file => {
+          const parts = file.path.split("/"), name = parts.pop(), id = `${mode}-${file.path}:${file.fresh ? "untracked" : "tracked"}`;
+          const status = (mode === "staged" ? file.indexStatus : file.worktreeStatus)?.trim().replace("?", "A") || file.status;
+          const row = h_flex().id(`change-${id}`).h(32).flex_none().px(8).gap(8).items_center().rounded(4).cursor_pointer()
+            .bg(this.open === file.path && this.openMode === mode ? t.selected : "#00000000").hover(el => el.bg(t.hover))
+            .on_click((_e, cx) => this.openFile(file, null, cx, { diffMode: mode }))
+            .child(div().w(12).flex_none().text_size(11).text_color(status === "A" ? t.ansi2 : status === "D" || status === "U" ? t.ansi1 : t.ansi3).child(status))
+            .child(svg("mods/changes-graph/file.svg").size(13).flex_none().text_color(t.muted))
+            .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(status === "D" ? t.muted : t.foreground).when(status === "D", el => el.line_through()).tooltip(file.path).child(name))
+            .child(div().max_w("45%").min_w(0).truncate().text_size(11).text_color(t.muted).tooltip(parts.join("/")).child(parts.join("/")))
+            .child(this.fileActions.rowMenu(file, mode, t, cx, disabled))
+            .child(this.fileCheckbox(`select-file-${id}`, mode === "staged", `${mode === "staged" ? "Unstage" : "Stage"} ${file.path}`, (checked, cx) => this.fileActions.stageFiles([file.path], checked, cx, snapshot), t, false, disabled || file.status === "U"));
+          return this.fileActions.row(file, row, t, cx, mode);
+        })))));
   }
 
   commit(cx) {
@@ -388,61 +429,55 @@ export default class Changes extends View {
     const current = key() === this.context;
     if (!current) this.refresh(cx);
     const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
-    const selectedCount = this.files.filter(f => f.staged).length;
+    const selectedCount = this.files.filter(f => f.staged).length, conflicts = this.files.some(file => file.status === "U");
     const hasMessage = Boolean(this.files.length && this.message.trim() && this.root && current);
-    const enabled = hasMessage && !this.busy && !this.loading;
-    const checkboxDisabled = this.busy || this.loading || !this.files.length || !current;
-    return v_flex().id("changes").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
+    const enabled = hasMessage && !this.busy && !this.loading && !conflicts;
+    const disabled = this.busy || this.loading || !current;
+    const name = this.root?.split(/[\\/]/).filter(Boolean).pop() || "repository";
+    const summary = this.view === "changes" ? `${this.files.length} files` : this.view === "stashes" ? `${this.stash.entries.length} saved ${this.stash.entries.length === 1 ? "stash" : "stashes"}` : `${(this.view === "history" ? this.history : this.graph).length} commits`;
+    return v_flex().id("changes").size_full().min_w(0).min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13).track_focus(this.handle)
       .on_key_down((e, cx) => {
         if (e.key === "escape" && this.view !== "changes" && this.selectedCommit) { this.closeDetail(cx); cx.stop_propagation(); }
         if (e.key === "escape" && this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); }
       })
       .when(this.repositories.rows.length > 1, el => el.child(this.repositories.render(t, cx)))
-      .child(h_flex().h(42).flex_none().px(10).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(Tabs.new("git-views").h_flex().flex_none().h(30).p(2).gap(2).rounded(6).bg(t.raised)
-          .children(["changes", "history", "graph"].map(view => div().w(28).h(26).flex_none().tooltip(view === "changes" ? "Changes" : view === "history" ? "History" : "Git Graph").child(Tab.new(`git-view-${view}`).w(28).h(26).items_center().justify_center().rounded(4)
-            .selected(this.view === view)
-            .accessibility_label(view === "changes" ? "Changes" : view === "history" ? "History" : "Git Graph")
-            .bg(this.view === view ? t.selected : t.raised).text_color(this.view === view ? t.foreground : t.muted)
-            .hover(s => s.bg(t.hover)).on_click((_e, cx) => this.selectView(view, cx))
-            .child(svg(`mods/changes-graph/${view}.svg`).size(15))))))
-        .child(div().font_semibold().child(this.view === "changes" ? "Changes" : this.view === "history" ? "History" : "Git Graph"))
-        .when(this.view === "history" && Boolean(this.historyPath), el => el
-          .child(div().flex_1().min_w(0).truncate().tooltip(this.historyPath).text_size(11).text_color(t.muted).child(this.historyPath))
-          .child(Button.new("clear-file-history").size(24).flex_none().flex().items_center().justify_center().rounded(5).bg("#00000000").text_color(t.muted)
-            .accessibility_label("Show all history").tooltip("Show all history").hover(s => s.bg(t.hover))
-            .on_click((_e, cx) => { this.historyPath = null; this.history = []; this.selectView("history", cx); }).child(svg("mods/pane/close.svg").size(12))))
-        .when(this.view === "changes", el => el
-          .child(div().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted).child(`${this.files.length} files`))
-          .child(h_flex().gap(6).items_center()
-            .child(div().text_size(11).text_color(t.ansi2).child(`+${add}`))
-            .child(div().text_size(11).text_color(t.ansi1).child(`−${del}`))))
+      .child(this.gitToolbar.repositoryHeader(t, cx))
+      .child(Tabs.new("git-views").h_flex().h(38).flex_none().px(10).gap(8).border_b(1).border_color(t.border).bg("#00000000")
+        .children([["changes", "Changes"], ["history", "History"], ["graph", "Graph"], ["stashes", "Stash"]].map(([view, label]) =>
+          Tab.new(`git-view-${view}`).h_flex().h(38).px(5).gap(6).flex_none().items_center().justify_center().text_size(12).font_normal().selected(this.view === view)
+            .accessibility_label(label).bg("#00000000").text_color(this.view === view ? t.foreground : t.muted).border_b(this.view === view ? 2 : 0).border_color(t.accent)
+            .focus(el => el.bg(t.raised)).on_click((_e, cx) => this.selectView(view, cx))
+            .child(svg(`mods/changes-graph/${view}.svg`).size(13)).child(label))))
+      .child(h_flex().h(36).flex_none().px(14).gap(6).items_center().text_size(11).text_color(t.muted)
+        .child(div().child(summary))
+        .when(this.view === "changes", el => el.child(div().text_color(t.ansi2).child(`+${add}`)).child(div().text_color(t.ansi1).child(`−${del}`)))
         .child(div().flex_1())
-        .when(this.view === "changes", el => el.child(this.fileActions.header(t, cx))))
-      .when(this.view !== "changes", el => el.child(this.graphView(t, this.view === "history")))
+        .when(this.view === "changes", el => el.child(this.fileActions.header(t, cx)))
+        .when(this.view !== "changes", el => el.child(div().child(this.view === "graph" ? "All refs" : "Local"))))
+      .when(this.view === "history" || this.view === "graph", el => el.child(this.graphView(t, this.view === "history")))
+      .when(this.view === "stashes", el => el.child(this.stash.render(t, cx)))
       .when(this.view === "changes", panel => panel
-      // overflow_y_scrollbar() wraps the list, so its flex sizing never reached the panel's layout.
-      .child(div().flex_1().min_h(0).relative()
-        .child(v_flex().id("changes-list").absolute().inset_0().overflow_y_scroll().p(6).children(this.files.slice(0, 1000).map((f) => {
-        const parts = f.path.split("/"), name = parts.pop();
-        const snapshot = this.fileActions.snapshot();
-        const row = h_flex().id(`change-${f.path}:${f.fresh ? "untracked" : "tracked"}`).h(28).flex_none().px(8).gap(8).items_center().rounded(7).cursor_pointer().when(this.open === f.path, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.openFile(f, null, cx))
-          .child(div().w(14).text_size(11).text_color(f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : f.status === "U" ? t.ansi1 : t.blocked).child(f.status))
-          .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(260).min_w(0).truncate().text_color(f.status === "D" ? t.muted : t.foreground).when(f.status === "D", el => el.line_through()).child(name)))
-          .when(f.add > 0, (e) => e.child(div().text_size(11).text_color(t.ansi2).child(`+${f.add}`))).when(f.del > 0, (e) => e.child(div().text_size(11).text_color(t.ansi1).child(`−${f.del}`)))
-          .child(this.fileCheckbox(`select-file-${f.path}:${f.fresh ? "untracked" : "tracked"}`, f.staged, `${f.staged && f.unstaged ? "Partially staged" : f.staged ? "Staged" : "Stage"} ${f.path}`, (checked, cx) => this.fileActions.stageFiles([f.path], checked, cx, snapshot), t, f.staged && f.unstaged, checkboxDisabled));
-        return this.fileActions.row(f, row, t, cx);
-      })).when(!this.files.length, (e) => e.child(div().p(8).text_color(t.dim).child(this.error || (this.loading ? "Loading changes…" : this.root ? "No uncommitted changes" : "No folder")))))
-        .child(Scrollbar.vertical("changes-list").absolute().inset_0()))
-      .when(this.limited, el => el.child(div().px(12).py(4).text_size(11).text_color(t.dim).child("Showing the first 1,000 changed files")))
-      .when(Boolean(this.note), (e) => e.child(div().px(10).pb(8).text_size(11).text_color(t.ansi1).child(this.note)))
-      .child(this.gitToolbar.render(t, cx))
-      .child(v_flex().flex_none().p(10).gap(8).border_t(1).border_color(t.border).bg(t.canvas)
-        .child(div().truncate().text_size(11).text_color(t.muted).tooltip(this.root || "").child(this.root ? `Commit to ${this.root.split(/[\\/]/).filter(Boolean).pop()} / ${this.branch || "detached HEAD"}` : "Select a repository to commit"))
-        .child(div().id("commit-message").w_full().min_w(0).px(4).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .child(div().flex_1().min_h(0).relative()
+          .child(v_flex().id("changes-list").absolute().inset_0().overflow_y_scroll().px(6).pb(8)
+            .child(this.changeRows(t, cx, disabled))
+            .when(!this.files.length, el => el.child(v_flex().px(16).py(32).gap(8).items_center().text_color(t.muted)
+              .when(Boolean(this.root && !this.error && !this.loading), el => el.child(svg("mods/workspace-chrome/check.svg").size(24)))
+              .child(div().font_semibold().text_size(12).child(this.error || (this.loading ? "Loading changes…" : this.root ? "All changes committed" : "Open a Git folder")))
+              .when(Boolean(this.root && !this.error && !this.loading), el => el.child(div().text_size(12).child(`${name} has a clean working tree.`))
+                .child(Button.new("clean-view-history").h(28).px(10).rounded(5).border_1().border_color(t.border).bg(t.raised).text_size(12).text_color(t.foreground)
+                  .accessibility_label("View history").on_click((_e, cx) => this.selectView("history", cx)).child("View history"))))))
+          .child(Scrollbar.vertical("changes-list").absolute().inset_0()))
+        .when(this.limited, el => el.child(div().px(14).py(6).text_size(11).text_color(t.muted).child("Showing the first 1,000 changed files"))))
+      .when(Boolean(this.note), el => el.child(div().px(14).py(8).text_size(12).text_color(t.ansi1).child(this.note)))
+      .child(this.gitToolbar.render(t, cx).border_t(1).border_color(t.border))
+      .child(v_flex().flex_none().p(14).gap(10).border_t(1).border_color(t.border).bg(t.canvas)
+        .child(div().id("commit-message").w_full().min_w(0).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .child(Textarea.new(this.input).w_full().h(54).text_size(12).line_height("18px").text_color(t.foreground).accessibility_label("Commit message")))
         .child(h_flex().w_full().items_center().justify_end().gap(8)
-          .child(Button.new("commit").h(26).px(10).flex().items_center().rounded(6).border_1().border_color(t.border).bg(t.raised).text_color(hasMessage ? t.foreground : t.dim).text_size(12).font_normal().disabled(!enabled).accessibility_label(selectedCount ? "Commit selected files" : "Commit all changes").tooltip(selectedCount ? "Commit selected files" : "Commit all changes").hover(s => s.bg(t.hover)).focus(s => s.border_color(t.accent)).on_click((_e, cx) => this.commit(cx)).child(this.committing ? "Committing…" : "Commit"))
-          .child(this.generator.render(t, cx)))));
+          .child(Button.new("commit").h(28).px(10).flex().items_center().rounded(5).border_1().border_color(t.border).bg(t.raised).text_color(hasMessage ? t.foreground : t.dim).text_size(12).font_normal().disabled(!enabled)
+            .accessibility_label(selectedCount ? `Commit ${selectedCount} staged files` : "Commit all changes").tooltip(selectedCount ? "Commit staged content only" : "Stage and commit all reviewed changes")
+            .hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent)).on_click((_e, cx) => this.commit(cx))
+            .child(this.committing ? "Committing…" : selectedCount ? `Commit ${selectedCount} ${selectedCount === 1 ? "file" : "files"}` : "Commit all"))
+          .child(this.generator.render(t, cx))));
   }
 }

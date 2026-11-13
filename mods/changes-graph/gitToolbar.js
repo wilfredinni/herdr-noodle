@@ -1,6 +1,6 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button, Popover, InputState, Input, ScrollHandle } from "gpui-base";
-import { exec } from "herdr";
+import { exec, shared, setShared } from "herdr";
 import { shortAge } from "./graph.js";
 import { showGitError } from "./gitError.js";
 
@@ -13,13 +13,13 @@ export function branchRows(text) {
   });
 }
 const ACTIONS = [
-  ["fetch", "Fetch", ["fetch", "--all"]],
-  ["fetch-from", "Fetch From…"],
-  ["pull", "Pull", ["pull", "--ff-only"]],
-  ["rebase", "Pull (Rebase)", ["pull", "--rebase"]],
-  ["push", "Push", ["push"]],
-  ["push-to", "Push To…"],
-  ["force", "Force Push…"],
+  ["fetch", "Fetch", ["fetch", "--all"], "fetch"],
+  ["fetch-from", "Fetch From…", null, "download"],
+  ["pull", "Pull", ["pull", "--ff-only"], "download"],
+  ["rebase", "Pull (Rebase)", ["pull", "--rebase"], "rebase"],
+  ["push", "Push", ["push"], "upload"],
+  ["push-to", "Push To…", null, "upload"],
+  ["force", "Force Push…", null, "warning"],
 ];
 
 export class GitToolbar {
@@ -177,7 +177,7 @@ export class GitToolbar {
   }
 
   menu(kind, trigger, body, width, cx) {
-    return Popover.new(`git-${kind}`).open(this.open === kind).anchor(kind === "branches" ? "bottom_left" : "bottom_right")
+    return Popover.new(`git-${kind}`).open(this.open === kind).anchor(kind === "repository" ? "top_right" : kind === "branches" ? "bottom_left" : "bottom_right")
       .track_focus(this.focus).on_open_change((open, cx) => this.show(kind, open, cx)).trigger(trigger)
       .when(this.open === kind, el => el.content(v_flex().w(width).max_h(380).p(5).gap(2).bg(this.colors.popover).border_1().border_color(this.colors.border).rounded(8).shadow_md()
         .track_focus(this.focus).on_key_down((e, cx) => {
@@ -190,11 +190,12 @@ export class GitToolbar {
         }).child(body)));
   }
 
-  option(id, label, action, disabled = false) {
+  option(id, label, action, disabled = false, icon = null) {
     const t = this.colors;
-    return Button.new(id).h_flex().h(29).px(8).items_center().justify_start().rounded(4).text_size(12).font_normal().text_color(disabled ? t.dim : t.foreground)
+    return Button.new(id).h_flex().h(29).px(8).gap(8).items_center().justify_start().rounded(4).text_size(12).font_normal().text_color(disabled ? t.dim : t.foreground)
       .disabled(disabled).accessibility_label(label).when(!disabled, el => el.hover(s => s.bg(t.hover)))
-      .on_click((_e, cx) => action(cx)).child(label);
+      .on_click((_e, cx) => action(cx))
+      .when(Boolean(icon), el => el.child(svg(`mods/changes-graph/${icon}.svg`).size(14).flex_none().text_color(disabled ? t.dim : t.muted))).child(label);
   }
 
   branchBody() {
@@ -235,14 +236,50 @@ export class GitToolbar {
     if (this.mode !== "actions") return v_flex().gap(2)
       .child(this.option("git-actions-back", "Back", cx => { this.sequence++; this.mode = "actions"; this.error = null; this.loading = false; cx.notify(); }))
       .child(div().px(8).py(3).text_size(11).text_color(t.muted).child(ACTIONS.find(a => a[0] === this.mode)?.[1] ?? "Choose remote"))
-      .children(this.remotes.map(name => this.option(`git-remote-${name}`, name, cx => this.remote(name, cx), this.loading)))
+      .children(this.remotes.map(name => this.option(`git-remote-${name}`, name, cx => this.remote(name, cx), this.loading, "remote")))
       .when(this.loading || this.error || !this.remotes.length, el => el.child(div().p(8).text_size(11).text_color(this.error ? t.ansi1 : t.muted).child(this.loading ? "Loading…" : this.error || "No remotes configured")));
-    return v_flex().gap(1).children(ACTIONS.map(([id, label]) => this.option(`git-action-${id}`, label, cx => this.action(id, cx), !p.branch && !id.startsWith("fetch"))));
+    return v_flex().gap(1).children(ACTIONS.flatMap(([id, label, , icon]) => [
+      ...(["pull", "push"].includes(id) ? [div().h(1).mx(4).my(4).bg(t.border)] : []),
+      this.option(`git-action-${id}`, label, cx => this.action(id, cx), !p.branch && !id.startsWith("fetch"), icon),
+    ]));
+  }
+
+  repositoryHeader(t, cx) {
+    this.colors = t;
+    const p = this.owner, snapshot = this.snapshot(), workspace = p.repositories.workspace(), selection = shared(`git.repository.${workspace.id}`);
+    const current = p.root && p.context === this.key();
+    const title = current ? p.root.split(/[\\/]/).filter(Boolean).pop() : "Repository";
+    const option = (id, label, action, disabled = false) => this.option(id, label, cx => { if (this.current(snapshot)) action(cx); }, disabled);
+    const body = v_flex().gap(1)
+      .child(option("repo-refresh", "Refresh", cx => { this.open = null; p.refresh(cx); p.repositories.refresh(cx, true); cx.notify(); }))
+      .child(option("repo-copy", "Copy repository path", cx => { cx.write_to_clipboard(snapshot.root); this.open = null; cx.notify(); }))
+      .when(selection?.workspace === workspace.folder && selection?.on === workspace.on, el => el.child(option("repo-follow", "Follow terminal repository", cx => {
+        this.open = null; setShared(`git.repository.${workspace.id}`, null); p.refresh(cx); cx.notify();
+      })))
+      .child(div().h(1).my(4).bg(t.border))
+      .child(option("repo-branches", "Switch or create branch…", cx => this.show("branches", true, cx)))
+      .child(option("repo-fetch", "Fetch", cx => this.run("Fetch", ["fetch", "--all"], cx, snapshot)))
+      .child(option("repo-pull", "Pull", cx => this.run("Pull", ["pull", "--ff-only"], cx, snapshot), !p.branch))
+      .child(option("repo-push", "Push", cx => this.run("Push", ["push"], cx, snapshot), !p.branch))
+      .child(div().h(1).my(4).bg(t.border))
+      .child(option("repo-stashes", "View stashes", cx => { this.open = null; p.selectView("stashes", cx); }))
+      .child(option("repo-stash-all", "Stash all changes", cx => { this.open = null; p.stash.create(cx); }, !p.hasHead || !p.files.length || p.files.some(file => file.status === "U")));
+    const trigger = Button.new("repository-actions").size(28).flex().items_center().justify_center().rounded(4).bg("#00000000").text_color(t.muted).disabled(!this.enabled())
+      .accessibility_label("Repository actions").tooltip("Repository actions").focus(el => el.border_color(t.accent)).child(svg("mods/changes-graph/more.svg").size(14));
+    return h_flex().h(40).flex_none().px(14).gap(9).items_center()
+      .child(svg("mods/changes-graph/repository.svg").size(14).flex_none().text_color(t.muted))
+      .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().tooltip(p.root || "").child(title))
+      .child(this.menu("repository", trigger, body, 240, cx));
   }
 
   render(t, cx) {
     this.colors = t;
     const p = this.owner, enabled = this.enabled(), hasRepository = Boolean(p.root && p.context === this.key()), branch = p.branch || (p.head ? `Detached · ${p.head.slice(0, 8)}` : "No branch");
+    const sync = hasRepository && p.branch ? p.sync : null, snapshot = this.snapshot();
+    const primary = sync?.behind > 0 ? { label: `Pull (${sync.behind})`, args: ["pull", "--ff-only"], icon: "download" }
+      : sync?.ahead > 0 ? { label: `Push (${sync.ahead})`, args: ["push"], icon: "upload" }
+      : { label: "Fetch", args: ["fetch", "--all"], icon: "fetch" };
+    const description = sync ? `${sync.ahead} outgoing · ${sync.behind} incoming · ${sync.upstream}` : "Fetch all remotes";
     const trigger = Button.new("git-current-branch").h_flex().h(28).min_w(0).max_w(220).flex_none().px(6).gap(6).items_center().justify_start().rounded(6)
       .bg(this.open === "branches" ? t.hover : "#00000000").border_1().border_color("#00000000").font_normal().text_size(12).text_color(hasRepository ? t.muted : t.dim)
       .disabled(!enabled).accessibility_label(`Switch branch, current: ${branch}`).hover(s => s.bg(t.hover).text_color(t.foreground)).focus(s => s.border_color(t.accent))
@@ -256,9 +293,10 @@ export class GitToolbar {
       .child(div().flex_1().min_w(0))
       .child(h_flex().flex_none().h(28).items_center()
         .child(Button.new("git-fetch").h_flex().h(28).px(6).gap(6).items_center().rounded(6).bg("#00000000").border_1().border_color("#00000000").font_normal().text_size(12).text_color(hasRepository ? t.muted : t.dim).disabled(!enabled)
-          .accessibility_label("Fetch all remotes").hover(s => s.bg(t.hover).text_color(t.foreground)).focus(s => s.border_color(t.accent)).on_click((_e, cx) => this.run("Fetch", ["fetch", "--all"], cx, this.snapshot()))
-          .child(svg(this.remoteRunning ? "mods/workspace-chrome/spinner.svg" : "mods/changes-graph/fetch.svg").id(this.remoteRunning ? "fetch-action-spinner" : "fetch-action-icon").size(13).flex_none().when(Boolean(this.remoteRunning), el => el.spin(900)))
-          .child("Fetch"))
+          .accessibility_label(primary.label === "Fetch" ? "Fetch all remotes" : primary.label).tooltip(description).hover(s => s.bg(t.hover).text_color(t.foreground)).focus(s => s.border_color(t.accent))
+          .on_click((_e, cx) => this.run(primary.label, primary.args, cx, snapshot, primary.args[0] === "fetch" ? undefined : snapshot.head))
+          .child(svg(this.remoteRunning ? "mods/workspace-chrome/spinner.svg" : `mods/changes-graph/${primary.icon}.svg`).id(this.remoteRunning ? "fetch-action-spinner" : "fetch-action-icon").size(13).flex_none().when(Boolean(this.remoteRunning), el => el.spin(900)))
+          .child(primary.label))
         .child(this.menu("actions", dropdown, this.actionBody(), 230, cx)));
   }
 }

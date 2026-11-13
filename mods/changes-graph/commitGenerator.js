@@ -56,7 +56,7 @@ export class CommitGenerator {
     this.selected = { connection: this.picking, model: model.id }; setShared(this.preferenceKey(), this.selected);
     this.open = false; this.picking = null; cx.notify();
   }
-  enabled() { return this.owner.gitToolbar.enabled() && !this.running; }
+  enabled() { return this.owner.gitToolbar.enabled() && !this.running && !this.owner.files.some(file => file.status === "U"); }
 
   generate(cx) {
     if (!this.enabled() || !this.owner.files.length || !this.model()) return;
@@ -117,17 +117,16 @@ export class CommitGenerator {
     const ready = available && hasChanges;
     const selected = selectedPaths(this.owner.files).length;
     const scope = selected && selected < this.owner.files.length ? `${selected} selected files` : "all changed files";
-    const trigger = Button.new("generate-connection-menu").w(38).h(24).h_flex().gap(4).items_center().justify_center().rounded_r(5).bg(this.open ? t.hover : "#00000000")
+    const trigger = Button.new("generate-connection-menu").w(30).h(26).h_flex().gap(4).items_center().justify_center().rounded_r(5).bg(this.open ? t.hover : "#00000000")
       .border_1().border_color("#00000000").text_color(t.muted).hover(s => s.bg(t.hover)).focus(s => s.border_color(t.accent)).disabled(!available)
       .accessibility_label("Choose generation connection and model").tooltip(model ? `${connection.name} · ${model.name}` : "Choose connection and model")
-      .when(Boolean(connection), el => el.child(this.icon(connection)))
       .child(svg("mods/changes-graph/chevron.svg").size(9));
-    return h_flex().id("generate-split-button").flex_none().h(26).items_center().rounded(6).border_1().border_color(t.border).bg(t.raised)
-      .child(Button.new("generate-commit-message").h(24).px(9).h_flex().items_center().gap(6).rounded_l(5).bg("#00000000")
+    return h_flex().id("generate-split-button").flex_none().h(28).items_center().rounded(5).border_1().border_color(t.border).bg(t.raised)
+      .child(Button.new("generate-commit-message").h(26).px(9).h_flex().items_center().gap(6).rounded_l(4).bg("#00000000")
         .border_1().border_color("#00000000").font_normal().text_size(12).text_color(hasChanges ? t.foreground : t.dim)
         .disabled(!ready).hover(s => s.bg(t.hover)).focus(s => s.border_color(t.accent)).accessibility_label("Generate commit message")
         .tooltip(`Generate a message for ${scope}`).on_click((_e, cx) => this.generate(cx))
-        .when(this.running, el => el.child(svg("mods/workspace-chrome/spinner.svg").id("commit-generation-spinner").size(13).spin(900))).child("Generate"))
+        .child(svg(this.running ? "mods/workspace-chrome/spinner.svg" : "mods/changes-graph/spark.svg").id(this.running ? "commit-generation-spinner" : "commit-generation-icon").size(13).when(this.running, el => el.spin(900))).child("Generate"))
       .child(div().w(1).h(12).flex_none().bg(t.border))
       .child(Popover.new("commit-generation-picker").open(this.open).anchor("bottom_right").track_focus(this.focus)
         .on_open_change((open, cx) => { this.open = open && available; this.picking = null; if (this.open) this.sync(cx, true); cx.notify(); })

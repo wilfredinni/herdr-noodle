@@ -39,6 +39,18 @@ export async function popStash(hash, snapshot) {
   return git(["stash", "pop", "--index", "stash@{0}"], snapshot);
 }
 
+export async function changeStash(entry, action, snapshot) {
+  if (!entry || !/^[0-9a-f]{40,64}$/.test(entry.hash) || !["apply", "pop", "drop"].includes(action)) throw new Error("Invalid stash action");
+  const current = (await stashes(snapshot)).find(stash => stash.ref === entry.ref);
+  if (current?.hash !== entry.hash) throw new Error("The stash list changed. Refresh it and try again.");
+  if (action !== "drop") await git(["stash", "apply", "--index", entry.hash], snapshot);
+  if (action !== "apply") {
+    const current = (await stashes(snapshot)).find(stash => stash.ref === entry.ref);
+    if (current?.hash !== entry.hash) throw new Error("The stash list changed. Refresh it before dropping a stash.");
+    await git(["stash", "drop", entry.ref], snapshot);
+  }
+}
+
 export function ignorePattern(path) {
   if (!path || /[\r\n\0]/.test(path) || path.startsWith("/") || path.split("/").some(part => !part || part === "." || part === ".."))
     throw new Error("This filename cannot be represented safely in an ignore file");

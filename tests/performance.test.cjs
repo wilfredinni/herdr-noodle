@@ -55,6 +55,7 @@ test('Changes context reads stay constant as the changed-file list grows', () =>
   load(c, 'changes-graph/fileActions.js', ['FileActions']);
   load(c, 'changes-graph/commitGenerator.js', ['CommitGenerator']);
   load(c, 'changes-graph/repositories.js', ['Repositories']);
+  load(c, 'changes-graph/stashPanel.js', ['StashPanel']);
   load(c, 'changes-graph/main.js', ['Changes']);
   const view = new c.Changes(); view.init({}, h.cx);
   Object.assign(view, { context: JSON.stringify({ cwd: '/repo', on: null }), root: '/repo', on: null, loading: false, message: 'message' });

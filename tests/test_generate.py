@@ -35,6 +35,26 @@ class GenerateTests(unittest.TestCase):
  def test_too_large_refused(self):
   (self.root/'new.txt').write_text('x'*(g.LIMIT+1))
   with self.assertRaisesRegex(ValueError,'too large'):self.snap()
+ def test_single_line_edit_above_old_limit_generates_without_truncation(self):
+  (self.root/'a.txt').write_text('a'*40000+'\n');self.git('add','a.txt');self.git('commit','-qm','Long-line baseline')
+  self.request['head']=self.git('rev-parse','HEAD').strip()
+  (self.root/'a.txt').write_text('a'*39999+'b\n');self.git('add','a.txt');self.request['selected']=['a.txt']
+  before=(self.root/'.git/index').read_bytes();snapshot=self.snap()
+  self.assertGreater(len(snapshot['payload'].encode()),60000)
+  self.assertIn('a'*39999+'b',snapshot['payload']);self.assertEqual(snapshot['paths'],['a.txt'])
+  with patch.object(g,'catalog',return_value={'connections':[{'id':'opencode:go','models':[{'id':'test'}]}]}),patch.object(g,'command',return_value='{"data":{"text":"Update the long-line fixture"}}') as command:
+   self.assertEqual(g.generate(self.request)['subject'],'Update the long-line fixture')
+   command.assert_called_once()
+  self.assertEqual(before,(self.root/'.git/index').read_bytes())
+ def test_oversize_diff_reports_actual_size_and_limit(self):
+  (self.root/'a.txt').write_text('a'*(g.LIMIT+1))
+  with self.assertRaisesRegex(ValueError,r'too large \([\d,]+ bytes; limit 120,000\)'):self.snap()
+ def test_encoded_opencode_body_is_checked_before_provider_request(self):
+  (self.root/'new.txt').write_text('"'*61000)
+  self.assertLess(len(self.snap()['payload'].encode()),g.LIMIT)
+  with patch.object(g,'catalog',return_value={'connections':[{'id':'opencode:go','models':[{'id':'test'}]}]}),patch.object(g,'command') as command:
+   with self.assertRaisesRegex(ValueError,'encoded OpenCode request is too large'):g.generate(self.request)
+   command.assert_not_called()
  def test_ignored_not_sent(self):
   (self.root/'.gitignore').write_text('secret\n');(self.root/'secret').write_text('hidden credential');self.assertNotIn('hidden credential',self.snap()['payload'])
  def test_unborn_repo(self):

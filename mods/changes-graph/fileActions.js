@@ -177,10 +177,10 @@ export class FileActions {
   header(t, cx) {
     this.colors = t; this.owner.gitToolbar.colors = t;
     const enabled = this.enabled(), files = this.owner.files, snapshot = this.snapshot();
-    const all = files.length > 0 && files.every(f => f.staged && !f.unstaged), label = all ? "Unstage All" : "Stage All";
+    const unstaged = files.some(file => file.unstaged ?? !file.staged), label = "Stage all";
     const control = Button.new("stage-all-toggle").h_flex().h(28).px(6).items_center().rounded(6).bg("#00000000").border_1().border_color("#00000000")
-      .font_normal().text_size(12).text_color(enabled && files.length ? t.muted : t.dim).disabled(!enabled || !files.length).accessibility_label(label)
-      .hover(s => s.bg(t.hover).text_color(t.foreground)).focus(s => s.border_color(t.accent)).on_click((_e, cx) => this.stageFiles(null, !all, cx, snapshot)).child(label);
+      .font_normal().text_size(11).text_color(enabled && unstaged ? t.muted : t.dim).disabled(!enabled || !unstaged).accessibility_label(label)
+      .hover(s => s.bg(t.hover).text_color(t.foreground)).focus(s => s.border_color(t.accent)).on_click((_e, cx) => this.stageFiles(null, true, cx, snapshot)).child(label);
     const dropdown = Button.new("file-actions-menu").w(20).h(28).flex().items_center().justify_center().rounded(6).bg("#00000000").border_1().border_color("#00000000")
       .disabled(!enabled).text_color(t.dim).accessibility_label("Change actions").hover(s => s.bg(t.hover).text_color(t.foreground)).focus(s => s.border_color(t.accent))
       .child(svg("mods/changes-graph/chevron.svg").size(11));
@@ -190,11 +190,23 @@ export class FileActions {
         .when(this.openKind === "all", el => el.content(this.frame(this.allBody(cx)))));
   }
 
-  row(file, row, t, cx) {
+  rowMenu(file, mode, t, cx, disabled) {
     this.colors = t; this.owner.gitToolbar.colors = t;
-    const open = this.openKind === "file" && this.target === `${file.path}:${file.fresh ? "untracked" : "tracked"}`;
-    return Popover.new(`file-context-${file.path}:${file.fresh ? "untracked" : "tracked"}`).mouse_button("right").open(open).anchor("top_right").track_focus(this.focus)
-      .on_open_change((open, cx) => this.show("file", `${file.path}:${file.fresh ? "untracked" : "tracked"}`, open, cx)).trigger(row)
+    const target = `${mode}-${file.path}:${file.fresh ? "untracked" : "tracked"}`, open = this.openKind === "file-menu" && this.target === target;
+    return div().flex_none().on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => cx.stop_propagation())
+      .child(Popover.new(`file-menu-${target}`).open(open).anchor("top_right").track_focus(this.focus)
+        .on_open_change((open, cx) => this.show("file-menu", target, open, cx))
+        .trigger(Button.new(`file-more-${target}`).size(22).flex().items_center().justify_center().rounded(4).bg("#00000000").text_color(t.muted).disabled(disabled)
+          .accessibility_label(`Actions for ${file.path}`).tooltip(`Actions for ${file.path}`).hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent))
+          .child(svg("mods/changes-graph/more.svg").size(13)))
+        .when(open, el => el.content(this.frame(this.fileBody(file, cx)))));
+  }
+
+  row(file, row, t, cx, mode = "all") {
+    this.colors = t; this.owner.gitToolbar.colors = t;
+    const target = `${mode}-${file.path}:${file.fresh ? "untracked" : "tracked"}`, open = this.openKind === "file" && this.target === target;
+    return Popover.new(`file-context-${target}`).mouse_button("right").open(open).anchor("top_right").track_focus(this.focus)
+      .on_open_change((open, cx) => this.show("file", target, open, cx)).trigger(row)
       .when(open, el => el.content(this.frame(this.fileBody(file, cx))));
   }
 }

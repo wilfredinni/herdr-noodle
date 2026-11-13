@@ -18,9 +18,11 @@ Requirements: Herdr **0.1.15** (the tested version), Git, and Python **3.9+**. `
 
 - Spaces show a robot icon and their open-agent count below the name, beside a two-line initial avatar.
 - Files have Git status colors and file-type icons. Files, diffs, and rendered Markdown open beside your terminal.
-- Changes, History, and Git Graph share one panel. Select files, review diffs, create or switch branches, and use the Fetch menu.
+- Changes, History, Graph, and Stash share labeled tabs. Staged and working changes have separate collapsible groups and previews; partially staged files appear in both. File menus are available by right-click or the row's ellipsis.
+- The repository heading has its own actions menu. History and Graph use compact tables; Graph adds lanes and inline refs. Stash supports real diff previews, Apply, Pop and confirmed Drop; a failed Pop keeps the stash.
+- The branch toolbar shows **Pull (N)** for incoming commits, **Push (N)** for outgoing commits, or **Fetch** when caught up. Counts use local upstream refs; Fetch remains in the menu. If both directions have commits, Pull takes priority and uses fast-forward only.
 - When the folder contains multiple repositories, a collapsible list inside Changes shows branches, changed-file counts, sync state, and conflicts. A single child repository opens automatically with the list hidden. Select a repository to scope every Git action and preview; each repository keeps its commit draft. **Follow terminal** returns to the terminal's repository.
-- A borderless three-line commit area has compact, right-aligned **Commit** and **Generate** controls. Choose a connection, then its available model.
+- A borderless three-line commit area has matching **Commit all** / **Commit N files** and **Generate** controls. Choose a connection, then its available model. Unresolved conflicts disable Commit and Generate.
 - The footer shows compact subscription usage meters with consistent green, warning, and red colors.
 
 Working-file previews ignore unrelated folder changes and defer refreshes while their tab is hidden.
@@ -31,7 +33,7 @@ connections and quotas without calculating spending statistics.
 Repository discovery scans the focused terminal's folder at most four levels deep, skips dependency/build
 folders and directory symlinks, and recognizes `.git` directories and files (worktrees/submodules).
 It refreshes once a minute or on request, with limits of 2,000 directories, 64 repositories,
-and eight seconds. The panel reports incomplete searches and unreadable status; open a closer
+and eight seconds. Refresh's tooltip reports incomplete searches and unreadable status; open a closer
 folder when the workspace exceeds those limits. It does not fetch remotes to calculate sync state.
 
 The preview uses fictional demo content rather than anyone's workspaces, terminal history, credentials, or account usage.
@@ -40,7 +42,7 @@ The preview uses fictional demo content rather than anyone's workspaces, termina
 
 Checkboxes represent the real Git index, not a separate selection. With checked files, Commit uses their staged content and preserves unstaged hunks. With nothing checked, Commit stages and commits all changed files in the reviewed file list, including new files and deletions. A message is required.
 
-Generate follows the same scope: checked files use their staged changes; no checked files includes all working changes. It only fills the text area. It does not stage files or commit. A changed draft, repository, branch, or selection prevents an obsolete result from replacing your current work. Large diffs over 60,000 UTF-8 bytes require a smaller selection.
+Generate follows the same scope: checked files use their staged changes; no checked files includes all working changes. It only fills the text area. It does not stage files or commit. A changed draft, repository, branch, or selection prevents an obsolete result from replacing your current work. Diffs include one context line per hunk and allow up to 120,000 UTF-8 bytes. OpenCode's encoded request body also has a 120,000-byte limit because its CLI uses a command-line argument. Errors report the actual size; stage a smaller selection when it exceeds the limit. Source is never silently truncated.
 
 Only Generate spins during generation. Fetch spins for actions from Fetch and its menu, including Pull and Push. Selecting files and switching branches leave those indicators still.
 
