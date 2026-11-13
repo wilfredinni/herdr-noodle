@@ -185,3 +185,33 @@ test('primary Git action follows real upstream counts without fetching', async t
   button = find(h.view.gitToolbar.render(h.t, h.cx), 'git-fetch');
   assert.equal(texts(button).trim(), 'Fetch');
 });
+
+test('History marks only commits absent from the tracked remote, including file history', async t => {
+  const root = fixture(t), baseline = git(root, 'rev-parse', 'HEAD').trim();
+  git(root, 'remote', 'add', 'origin', root); git(root, 'update-ref', 'refs/remotes/origin/main', baseline);
+  git(root, 'branch', '--set-upstream-to=origin/main');
+  fs.writeFileSync(path.join(root, 'a.txt'), 'outgoing change\n');
+  git(root, 'add', 'a.txt'); git(root, 'commit', '-qm', 'Outgoing file change');
+  const outgoing = git(root, 'rev-parse', 'HEAD').trim();
+  git(root, 'commit', '--allow-empty', '-qm', 'Another outgoing commit');
+  const latest = git(root, 'rev-parse', 'HEAD').trim(), h = harness(root); await h.flush();
+  h.view.selectView('history', h.cx); await h.flush();
+  let rows = new Map(h.view.history.map(row => [row.fullHash, row]));
+  assert.equal(rows.get(latest).unpushed, true); assert.equal(rows.get(outgoing).unpushed, true); assert.equal(rows.get(baseline).unpushed, false);
+  let tree = h.view.render(h.cx);
+  assert.ok(find(tree, `unpushed-commit-${outgoing}`)); assert.equal(find(tree, `unpushed-commit-${baseline}`), undefined);
+  assert.match(find(tree, `commit-${baseline}`).attrs.tooltip[0], /On origin\/main/);
+  assert.match(find(tree, `unpushed-commit-${outgoing}`).attrs.tooltip[0], /Unpushed to origin\/main/);
+  h.view.showFileHistory('a.txt', h.cx); await h.flush();
+  rows = new Map(h.view.history.map(row => [row.fullHash, row]));
+  assert.equal(rows.has(latest), false); assert.equal(rows.get(outgoing).unpushed, true);
+  // Advance only the disposable tracking ref, simulating a later fetch.
+  git(root, 'update-ref', 'refs/remotes/origin/main', outgoing); h.view.refresh(h.cx); await h.flush();
+  assert.equal(h.view.history.find(row => row.fullHash === outgoing).unpushed, false);
+  assert.equal(find(h.view.render(h.cx), `unpushed-commit-${outgoing}`), undefined);
+  git(root, 'update-ref', '-d', 'refs/remotes/origin/main'); h.view.refresh(h.cx); await h.flush();
+  assert.ok(h.view.history.every(row => row.upstream === undefined && row.unpushed === undefined));
+  git(root, 'branch', 'local-base', baseline); git(root, 'config', 'branch.main.remote', '.'); git(root, 'config', 'branch.main.merge', 'refs/heads/local-base');
+  h.view.refresh(h.cx); await h.flush();
+  assert.ok(h.view.history.every(row => row.upstream === undefined && row.unpushed === undefined));
+});

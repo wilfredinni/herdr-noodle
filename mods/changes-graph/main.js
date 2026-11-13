@@ -1,7 +1,7 @@
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, Tabs, Tab, Button, Checkbox } from "gpui-base";
 import { spaces, panes, focused, exec, watchFolder, theme, settings, run, shared, setShared } from "herdr";
-import { GRAPH_ARGS, HISTORY_ARGS, GRAPH_ROW_HEIGHT, graphRows, COMMIT_FORMAT, commitDetail, refLabels, shortAge } from "./graph.js";
+import { GRAPH_ARGS, HISTORY_ARGS, GRAPH_LIMIT, GRAPH_ROW_HEIGHT, graphRows, COMMIT_FORMAT, commitDetail, refLabels, shortAge } from "./graph.js";
 import { GitToolbar } from "./gitToolbar.js";
 import { showGitError } from "./gitError.js";
 import { FileActions } from "./fileActions.js";
@@ -156,14 +156,27 @@ export default class Changes extends View {
 
   async loadHistory(context) {
     if (!this.root || context !== key()) return;
-    const version = this.historyVersion = (this.historyVersion ?? 0) + 1, path = this.historyPath;
+    const version = this.historyVersion = (this.historyVersion ?? 0) + 1, path = this.historyPath, head = this.head, tracked = this.sync?.upstream;
     this.historyLoading = true; this.historyError = null;
     try {
       if (!this.hasHead) { this.history = []; return; }
-      const result = await exec("git", [...READ, ...HISTORY_ARGS, ...(path ? ["--", path] : [])], { cwd: this.root, on: this.on });
-      if (context !== key() || version !== this.historyVersion) return;
+      const options = { cwd: this.root, on: this.on }, paths = path ? ["--", path] : [];
+      const result = await exec("git", [...READ, ...HISTORY_ARGS.map(arg => arg === "HEAD" ? head : arg), ...paths], options);
+      if (context !== key() || version !== this.historyVersion || head !== this.head) return;
       if (result.code !== 0) throw new Error(result.stderr || "Cannot load Git history");
-      this.history = graphRows(result.stdout);
+      const rows = graphRows(result.stdout);
+      if (tracked && rows.length) try {
+        const ref = await exec("git", [...READ, "rev-parse", "--verify", "--symbolic-full-name", "@{upstream}"], options);
+        const upstream = ref.stdout.trim();
+        if (ref.code === 0 && upstream.startsWith("refs/remotes/")) {
+          const outgoing = await exec("git", [...READ, "log", "--format=%H", "--date-order", `--max-count=${GRAPH_LIMIT}`, head, "--not", upstream, ...paths], options);
+          if (outgoing.code === 0) {
+            const unpushed = new Set(outgoing.stdout.split("\n").filter(Boolean));
+            for (const row of rows) { row.unpushed = unpushed.has(row.fullHash); row.upstream = upstream.slice(13); }
+          }
+        }
+      } catch { /* History stays readable when upstream status is unavailable. */ }
+      if (context === key() && version === this.historyVersion && head === this.head) this.history = rows;
     } catch (error) { if (context === key() && version === this.historyVersion) this.historyError = String(error); }
     finally { if (version === this.historyVersion) this.historyLoading = false; }
   }
@@ -267,7 +280,7 @@ export default class Changes extends View {
     const merge = row.parents.split(" ").length > 1;
     return Button.new(`commit-${row.fullHash}`).h_flex().w_full().h(height).flex_none().items_center().gap(8).px(8).text_size(12).font_normal()
       .bg(this.selectedCommit === row.fullHash ? t.selected : t.background).cursor_pointer()
-      .accessibility_label(`Show commit ${row.hash}: ${row.subject}`).tooltip(`${row.subject}\n${row.hash} · ${row.author} · ${row.age}${row.refs ? "\n" + row.refs : ""}`)
+      .accessibility_label(`Show commit ${row.hash}: ${row.subject}${!width && row.unpushed ? ` · Unpushed to ${row.upstream}` : ""}`).tooltip(`${row.subject}\n${row.hash} · ${row.author} · ${row.age}${row.refs ? "\n" + row.refs : ""}${!width && row.upstream ? `\n${row.unpushed ? "Unpushed to" : "On"} ${row.upstream} · last fetched refs` : ""}`)
       .hover(s => s.bg(t.hover)).on_click((_e, cx) => this.pickCommit(row, cx))
       .when(width > 0, el => el.child(lane))
       .child(h_flex().flex_1().min_w(0).items_center().gap(6)
@@ -280,7 +293,9 @@ export default class Changes extends View {
               .child(svg(`mods/changes-graph/${ref.kind}.svg`).size(10).flex_none())
               .child(div().min_w(0).truncate().child(ref.name));
           }))))
-        .child(div().flex_1().min_w(0).truncate().text_color(merge ? t.muted : t.foreground).child(row.subject)))
+        .child(div().flex_1().min_w(0).truncate().text_color(merge ? t.muted : t.foreground).child(row.subject))
+        .when(!width && Boolean(row.unpushed), el => el.child(div().id(`unpushed-commit-${row.fullHash}`).size(14).flex_none().tooltip(`Unpushed to ${row.upstream} · last fetched refs`)
+          .child(svg("mods/changes-graph/arrow-up.svg").size(13).text_color(t.accent)))))
       .child(div().w(32).flex_none().text_right().text_color(t.muted).child(shortAge(row.timestamp)))
       .child(div().w(100).flex_none().truncate().text_color(t.muted).child(row.author))
       .child(div().w(66).flex_none().font_family(settings().font_family ?? "JetBrains Mono").text_size(11).text_color(t.muted).child(row.hash));
@@ -446,12 +461,11 @@ export default class Changes extends View {
             .accessibility_label(label).bg("#00000000").text_color(this.view === view ? t.foreground : t.muted).border_b(this.view === view ? 2 : 0).border_color(t.accent)
             .focus(el => el.bg(t.raised)).on_click((_e, cx) => this.selectView(view, cx))
             .child(svg(`mods/changes-graph/${view}.svg`).size(13)).child(label))))
-      .when(this.view !== "history", panel => panel.child(h_flex().h(36).flex_none().px(14).gap(6).items_center().text_size(11).text_color(t.muted)
-        .when(Boolean(summary), el => el.child(div().child(summary)))
+      .when(Boolean(summary), panel => panel.child(h_flex().h(36).flex_none().px(14).gap(6).items_center().text_size(11).text_color(t.muted)
+        .child(div().child(summary))
         .when(this.view === "changes", el => el.child(div().text_color(t.ansi2).child(`+${add}`)).child(div().text_color(t.ansi1).child(`−${del}`)))
         .child(div().flex_1())
-        .when(this.view === "changes", el => el.child(this.fileActions.header(t, cx)))
-        .when(this.view === "graph", el => el.child(div().child("All refs")))))
+        .when(this.view === "changes", el => el.child(this.fileActions.header(t, cx)))))
       .when(this.view === "history" || this.view === "graph", el => el.child(this.graphView(t, this.view === "history")))
       .when(this.view === "stashes", el => el.child(this.stash.render(t, cx)))
       .when(this.view === "changes", panel => panel
