@@ -1,5 +1,5 @@
 import { View, div, svg, PathBuilder } from "gpui-kit";
-import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, Tabs, Tab, Button, Checkbox } from "gpui-base";
+import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, Tabs, Tab, Button, Checkbox, Popover } from "gpui-base";
 import { spaces, panes, focused, exec, watchFolder, theme, settings, run, shared, setShared } from "herdr";
 import { GRAPH_ARGS, HISTORY_ARGS, GRAPH_LIMIT, GRAPH_ROW_HEIGHT, graphRows, COMMIT_FORMAT, commitDetail, refLabels, shortAge } from "./graph.js";
 import { GitToolbar } from "./gitToolbar.js";
@@ -8,6 +8,7 @@ import { FileActions } from "./fileActions.js";
 import { CommitGenerator } from "./commitGenerator.js";
 import { Repositories } from "./repositories.js";
 import { StashPanel } from "./stashPanel.js";
+import { git } from "./fileOps.js";
 
 function sourceLocation() {
   const space = spaces().find((s) => s.active), f = focused();
@@ -41,7 +42,7 @@ export default class Changes extends View {
     this.view = "changes"; this.graph = []; this.graphError = null; this.selectedCommit = null; this.detail = null; this.detailError = null;
     this.history = []; this.historyError = null; this.historyLoading = false;
     this.files = []; this.message = ""; this.messageRevision = 0; this.generator = new CommitGenerator(this, key, cx); this.handle = cx.focus_handle();
-    this.branch = null; this.head = ""; this.sync = null; this.gitToolbar = new GitToolbar(this, key, cx);
+    this.branch = null; this.head = ""; this.sync = null; this.lastCommit = null; this.undoOpen = false; this.gitToolbar = new GitToolbar(this, key, cx);
     this.fileActions = new FileActions(this, key, cx); this.stash = new StashPanel(this); this.historyPath = null; this.collapsed = {};
     this.input = TextareaState.new({ placeholder: "Write a commit message…", rows: 3 });
     this.input.on("change", (_e, cx) => {
@@ -79,7 +80,7 @@ export default class Changes extends View {
       this.graph = []; this.graphError = null; this.graphContext = null; this.graphLoading = false;
       this.history = []; this.historyError = null; this.historyLoading = false; this.historyVersion = (this.historyVersion ?? 0) + 1;
       this.context = context; this.root = null; this.files = []; this.open = null;
-      this.branch = null; this.head = ""; this.sync = null; this.gitToolbar.reset();
+      this.branch = null; this.head = ""; this.sync = null; this.lastCommit = null; this.undoOpen = false; this.undoSnapshot = null; this.gitToolbar.reset();
       this.fileActions.reset(); this.stash.reset(); this.historyPath = null; this.collapsed = {};
       this.message = ""; this.messageRevision++; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.limited = false;
     }
@@ -91,7 +92,7 @@ export default class Changes extends View {
         const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
         if (key() !== context) return;
         if (top.code !== 0) {
-          this.selectedCommit = null; this.detail = null; this.graph = []; this.graphError = null; this.history = []; this.historyError = null; this.root = null; this.branch = null; this.head = ""; this.sync = null; this.files = []; this.open = null;
+          this.selectedCommit = null; this.detail = null; this.graph = []; this.graphError = null; this.history = []; this.historyError = null; this.root = null; this.branch = null; this.head = ""; this.sync = null; this.lastCommit = null; this.undoOpen = false; this.undoSnapshot = null; this.files = []; this.open = null;
           this.error = this.repositories.rows.length > 1 ? "Select a repository above" : "No Git repository found in this folder";
           if (this.repositories.rows.length === 1 && this.repositories.rows[0].root !== cwd) this.repositories.choose(this.repositories.rows[0], cx);
           return;
@@ -100,6 +101,15 @@ export default class Changes extends View {
         const status = await git(["status", "--porcelain=v1", "-z", "--branch", "--no-renames", "--untracked-files=all"]);
         if (status.code !== 0) throw new Error(status.stderr);
         const head = await git(["rev-parse", "--verify", "HEAD"]);
+        const hash = head.code === 0 ? head.stdout.trim() : "";
+        let lastCommit = this.lastCommit?.hash === hash ? this.lastCommit : null;
+        if (hash && !lastCommit) {
+          const result = await git(["show", "--no-patch", "--format=%H%x00%P%x00%B", hash, "--"]);
+          if (result.code === 0) {
+            const [id, parents, ...body] = result.stdout.split("\0"), message = body.join("\0").trimEnd();
+            if (id === hash) lastCommit = { hash, parents: parents.split(" ").filter(Boolean), message, subject: message.split("\n", 1)[0] };
+          }
+        }
         const branch = await git(["symbolic-ref", "--quiet", "HEAD"]);
         if (branch.code !== 0 && branch.code !== 1) throw new Error(branch.stderr || "Cannot read current branch");
         const stats = {};
@@ -125,7 +135,8 @@ export default class Changes extends View {
         if (key() !== context) return;
         this.root = root; this.on = on; this.hasHead = head.code === 0; this.files = files; this.limited = entries.length > 1000; this.error = null;
         this.branch = branch.code === 0 ? branch.stdout.trim().replace(/^refs\/heads\//, "") : null;
-        this.head = head.code === 0 ? head.stdout.trim() : "";
+        if (this.head !== hash) { this.undoOpen = false; this.undoSnapshot = null; }
+        this.head = hash; this.lastCommit = lastCommit;
         this.sync = upstreamState(status.stdout);
         if (changedContext && revision === this.messageRevision) {
           this.message = this.drafts.get(draftKey(root, on)) || ""; this.messageRevision++; this.input.set_value(this.message);
@@ -360,6 +371,44 @@ export default class Changes extends View {
         .when(mixed, el => el.child(div().w(7).h(1.5).bg(t.accent_foreground))));
   }
 
+  undoLastCommit(cx) {
+    const snapshot = this.undoSnapshot, commit = snapshot?.commit;
+    if (!commit || snapshot.head !== this.head || commit.hash !== this.head || !/^[0-9a-f]{40,64}$/.test(commit.parents[0] || "") || !this.fileActions.current(snapshot)) return;
+    const revision = this.messageRevision;
+    this.undoOpen = false;
+    this.fileActions.run("Undo last commit", async snapshot => {
+      await git(["reset", "--soft", commit.parents[0]], snapshot);
+      if (this.fileActions.current(snapshot) && revision === this.messageRevision && !this.message.trim()) {
+        this.message = commit.message; this.messageRevision++; this.input.set_value(commit.message);
+      }
+    }, cx, snapshot);
+  }
+
+  lastCommitRow(t, cx, current) {
+    const commit = this.lastCommit, snapshot = this.undoSnapshot;
+    const enabled = Boolean(current && commit && commit.hash === this.head && commit.parents.length && !this.busy && !this.loading);
+    const tooltip = commit?.parents.length ? "Undo last commit locally; keep its changes staged" : "The first commit has no parent to undo to";
+    return h_flex().id("last-commit-row").h(32).flex_none().px(10).gap(6).items_center().border_t(1).border_color(t.border).bg(t.background)
+      .child(Button.new("last-commit-details").h_flex().h(28).flex_1().min_w(0).px(2).items_center().justify_start().bg("#00000000").text_size(12).font_normal().text_color(t.muted)
+        .disabled(!current || this.loading).accessibility_label(`View last commit: ${commit.subject}`).tooltip(`${commit.subject}\n${commit.hash}`)
+        .hover(el => el.text_color(t.foreground)).focus(el => el.border_color(t.accent))
+        .on_click((_e, cx) => { if (this.context === key() && this.head === commit.hash) { this.selectView("history", cx); this.pickCommit({ fullHash: commit.hash }, cx); } })
+        .child(div().min_w(0).truncate().child(commit.subject)))
+      .child(Popover.new("undo-last-commit").open(this.undoOpen).anchor("bottom_right").track_focus(this.handle)
+        .on_open_change((open, cx) => { this.undoOpen = open && enabled; this.undoSnapshot = this.undoOpen ? { ...this.fileActions.snapshot(), commit } : null; cx.notify(); })
+        .trigger(Button.new("undo-last-commit-button").size(24).flex().items_center().justify_center().rounded(4).bg("#00000000").text_color(t.muted).disabled(!enabled)
+          .accessibility_label("Undo last commit").tooltip(tooltip).hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent)).child(svg("mods/changes-graph/undo.svg").size(14)))
+        .when(this.undoOpen && Boolean(snapshot), el => el.content(v_flex().w(300).p(12).gap(10).rounded(8).border_1().border_color(t.border).bg(t.popover).text_color(t.foreground).track_focus(this.handle)
+          .on_key_down((e, cx) => { if (e.key === "escape") { this.undoOpen = false; cx.stop_propagation(); cx.notify(); } })
+          .child(div().text_size(13).font_semibold().child("Undo last commit?"))
+          .child(div().text_size(12).child(snapshot.commit.subject))
+          .child(div().text_size(12).text_color(t.muted).child("Move local HEAD back one commit. Keep the index and working files unchanged; the commit's changes remain staged. The remote is unchanged."))
+          .child(h_flex().justify_end().gap(8)
+            .child(Button.new("undo-last-cancel").h(28).px(9).rounded(5).bg(t.raised).text_size(12).on_click((_e, cx) => { this.undoOpen = false; cx.notify(); }).child("Cancel"))
+            .child(Button.new("undo-last-confirm").h(28).px(9).rounded(5).border_1().border_color(t.border).bg(t.raised).text_size(12)
+              .disabled(!enabled || snapshot.head !== this.head).accessibility_label("Confirm undo last commit").on_click((_e, cx) => this.undoLastCommit(cx)).child("Undo commit"))))));
+  }
+
   changeRows(t, cx, disabled) {
     const snapshot = this.fileActions.snapshot(), files = this.files.slice(0, 1000);
     const groups = [["staged", "Staged changes", files.filter(file => file.staged && file.status !== "U")],
@@ -490,6 +539,7 @@ export default class Changes extends View {
             .accessibility_label(selectedCount ? `Commit ${selectedCount} staged files` : "Commit all changes").tooltip(selectedCount ? "Commit staged content only" : "Stage and commit all reviewed changes")
             .hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent)).on_click((_e, cx) => this.commit(cx))
             .child(this.committing ? "Committing…" : selectedCount ? `Commit ${selectedCount} ${selectedCount === 1 ? "file" : "files"}` : "Commit all"))
-          .child(this.generator.render(t, cx))));
+          .child(this.generator.render(t, cx))))
+      .when(Boolean(this.lastCommit && this.root), el => el.child(this.lastCommitRow(t, cx, current)));
   }
 }

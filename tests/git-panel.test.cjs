@@ -215,3 +215,67 @@ test('History marks only commits absent from the tracked remote, including file 
   h.view.refresh(h.cx); await h.flush();
   assert.ok(h.view.history.every(row => row.upstream === undefined && row.unpushed === undefined));
 });
+
+function openUndo(h) {
+  find(h.view.render(h.cx), 'undo-last-commit').handlers.open_change(true, h.cx);
+  return find(h.view.render(h.cx), 'undo-last-confirm');
+}
+
+test('last-commit undo preserves the index and working files and restores an empty draft', async t => {
+  const root = fixture(t), parent = git(root, 'rev-parse', 'HEAD').trim();
+  fs.writeFileSync(path.join(root, 'a.txt'), 'committed change\n'); git(root, 'add', 'a.txt'); git(root, 'commit', '-qm', 'Latest subject\n\nCommit body');
+  const last = git(root, 'rev-parse', 'HEAD').trim();
+  fs.writeFileSync(path.join(root, 'a.txt'), 'later unstaged change\n');
+  fs.writeFileSync(path.join(root, 'b.txt'), 'separately staged addition\n'); git(root, 'add', 'b.txt');
+  const h = harness(root); await h.flush();
+  assert.equal(h.view.lastCommit.hash, last); assert.equal(h.view.lastCommit.subject, 'Latest subject');
+  assert.match(texts(find(h.view.render(h.cx), 'last-commit-row')), /Latest subject/);
+  const index = fs.readFileSync(path.join(root, '.git/index'));
+  openUndo(h).handlers.click({}, h.cx); await h.flush();
+  assert.deepEqual(h.errors, []); assert.equal(git(root, 'rev-parse', 'HEAD').trim(), parent);
+  assert.deepEqual(fs.readFileSync(path.join(root, '.git/index')), index);
+  assert.equal(git(root, 'show', ':a.txt'), 'committed change\n');
+  assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'later unstaged change\n');
+  assert.equal(git(root, 'show', ':b.txt'), 'separately staged addition\n');
+  assert.equal(h.view.message, 'Latest subject\n\nCommit body');
+  assert.equal(h.view.lastCommit.hash, parent);
+});
+
+test('last-commit undo refuses a HEAD that changed after the displayed commit', async t => {
+  const root = fixture(t); git(root, 'commit', '--allow-empty', '-qm', 'Displayed commit');
+  const h = harness(root); await h.flush(); const confirm = openUndo(h);
+  git(root, 'commit', '--allow-empty', '-qm', 'External commit');
+  const head = git(root, 'rev-parse', 'HEAD').trim();
+  confirm.handlers.click({}, h.cx); await h.flush();
+  assert.equal(git(root, 'rev-parse', 'HEAD').trim(), head);
+  assert.match(h.errors[0], /branch changed/);
+});
+
+test('last-commit undo keeps an existing commit-message draft', async t => {
+  const root = fixture(t); git(root, 'commit', '--allow-empty', '-qm', 'Undo this subject');
+  const h = harness(root); await h.flush(); h.view.message = 'Keep my draft'; h.view.messageRevision++;
+  openUndo(h).handlers.click({}, h.cx); await h.flush();
+  assert.deepEqual(h.errors, []); assert.equal(h.view.message, 'Keep my draft');
+});
+
+test('initial commits are displayed but cannot be undone with a soft reset', async t => {
+  const root = fixture(t), h = harness(root); await h.flush();
+  assert.equal(h.view.lastCommit.parents.length, 0);
+  assert.equal(find(h.view.render(h.cx), 'undo-last-commit-button').attrs.disabled[0], true);
+  const head = git(root, 'rev-parse', 'HEAD').trim();
+  h.view.undoSnapshot = { ...h.view.fileActions.snapshot(), commit: h.view.lastCommit };
+  h.view.undoLastCommit(h.cx); await h.flush();
+  assert.equal(git(root, 'rev-parse', 'HEAD').trim(), head);
+});
+
+test('undoing a merge returns to its first parent and keeps the merged content staged', async t => {
+  const root = fixture(t);
+  git(root, 'switch', '-qc', 'topic'); fs.writeFileSync(path.join(root, 'topic.txt'), 'topic\n'); git(root, 'add', '.'); git(root, 'commit', '-qm', 'Topic change');
+  git(root, 'switch', '-q', 'main'); git(root, 'commit', '--allow-empty', '-qm', 'Main change');
+  const parent = git(root, 'rev-parse', 'HEAD').trim(); git(root, 'merge', '--no-ff', '-qm', 'Merge topic', 'topic');
+  const h = harness(root); await h.flush(); assert.equal(h.view.lastCommit.parents.length, 2);
+  openUndo(h).handlers.click({}, h.cx); await h.flush();
+  assert.deepEqual(h.errors, []); assert.equal(git(root, 'rev-parse', 'HEAD').trim(), parent);
+  assert.equal(git(root, 'show', ':topic.txt'), 'topic\n');
+  assert.equal(fs.readFileSync(path.join(root, 'topic.txt'), 'utf8'), 'topic\n');
+});

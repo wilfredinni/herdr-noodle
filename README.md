@@ -23,6 +23,7 @@ Requirements: Herdr **0.1.15** (the tested version), Git, and Python **3.9+**. `
 - The branch toolbar shows **Pull (N)** for incoming commits, **Push (N)** for outgoing commits, or **Fetch** when caught up. Counts use local upstream refs; Fetch remains in the menu. If both directions have commits, Pull takes priority and uses fast-forward only.
 - When the folder contains multiple repositories, a collapsible list inside Changes shows branches, changed-file counts, sync state, and conflicts. A single child repository opens automatically with the list hidden. Select a repository to scope every Git action and preview; each repository keeps its commit draft. **Follow terminal** returns to the terminal's repository.
 - A borderless three-line commit area has matching **Commit all** / **Commit N files** and **Generate** controls. Choose a connection, then its available model. Unresolved conflicts disable Commit and Generate.
+- Below the buttons, the latest commit message opens its details. Its Undo button confirms a local soft reset to the first parent, keeping the index and working files unchanged. It restores the old message only when the draft is still empty, and refuses a changed HEAD. Initial commits have no parent and cannot be undone here. Remote history is unchanged.
 - The footer shows compact subscription usage meters with consistent green, warning, and red colors.
 
 Working-file previews ignore unrelated folder changes and defer refreshes while their tab is hidden.
