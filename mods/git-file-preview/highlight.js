@@ -48,9 +48,9 @@ else
   git --no-optional-locks -c core.fsmonitor=false show "$2:$1" | head -c 1048576
 fi | bat --no-config --style=plain --paging=never --color=always --theme=ansi --tabs=4 --wrap=never --strip-ansi=always --file-name "$1"`;
 
-export async function highlightRows(selection, rows, host) {
+export async function highlightRows(selection, rows, host, sourceRevision) {
   const status = selection.diffMode === "staged" ? selection.file.indexStatus : selection.file.status;
-  const before = selection.file.fresh ? null : selection.diffMode === "unstaged" ? "INDEX" : status === "A" ? null : selection.hash ? selection.parent : selection.hasHead ? "HEAD" : null;
+  const before = selection.file.fresh ? null : status === "U" ? "HEAD" : selection.diffMode === "unstaged" ? "INDEX" : status === "A" ? null : selection.hash ? selection.parent : selection.hasHead ? "HEAD" : null;
   const after = status === "D" ? null : selection.hash || (selection.diffMode === "staged" ? "INDEX" : "WORKTREE");
   const source = async revision => {
     if (!revision) return [];
@@ -58,7 +58,7 @@ export async function highlightRows(selection, rows, host) {
     if (result.code !== 0) throw new Error("Syntax highlighting unavailable · bat is required on this machine");
     return ansiLines(result.stdout);
   };
-  const [oldLines, newLines] = await Promise.all([source(before), source(after)]);
+  const [oldLines, newLines] = sourceRevision ? [[], await source(sourceRevision)] : await Promise.all([source(before), source(after)]);
   for (const row of rows) {
     if (row.number === undefined) continue;
     const spans = (row.kind === "-" ? oldLines : newLines)[row.number - 1];

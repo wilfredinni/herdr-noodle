@@ -36,7 +36,7 @@ function harness() {
     h_flex: element, v_flex: element, Button: { new: element }, Checkbox: { new: element }, Popover: { new: element },
     InputState: { new: input }, TextareaState: { new: input }, Input: { new: element }, Textarea: { new: element },
     ScrollHandle: { new: () => ({ scroll_to_item() {} }) }, Scrollbar: { vertical: element }, Tabs: { new: element }, Tab: { new: element },
-    v_virtual_list: element, TextView: { markdown: element }, PathBuilder: {}, settings: () => ({}),
+    v_virtual_list: element, TextView: { markdown: element }, splitRows: () => [], PathBuilder: {}, settings: () => ({}),
     theme: () => new Proxy({}, { get: (_, key) => String(key) }), props: () => ({}),
     spaces: () => { calls.spaces++; return [{ id: 's', active: true, machine: null, folder: '/repo' }]; },
     panes: () => { calls.panes++; return [{ pane: 'p', cwd: '/repo', terminal: 't', tab: 'tab' }]; },

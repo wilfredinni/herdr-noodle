@@ -27,6 +27,13 @@ Requirements: Herdr **0.1.15** (the tested version), Git, and Python **3.9+**. `
 - The footer shows compact subscription usage meters with consistent green, warning, and red colors.
 
 Working-file previews ignore unrelated folder changes and defer refreshes while their tab is hidden.
+The shared preview includes Diff, Source and rendered Markdown tabs, unified or aligned split diffs,
+both line numbers, file statistics, copying paths and file history. History/Graph previews include
+the full commit message, author, parents and file chips; switching files keeps the selected commit.
+The file menu stages, unstages, ignores and confirms discarding or moving untracked files to Trash.
+Conflict review offers current, incoming or both versions, followed by an explicit resolve-and-stage
+confirmation. It rejects changed content, index or HEAD; binary, large and malformed conflicts need
+an external editor. Historical previews never offer mutations.
 Unchanged source and diffs reuse syntax colors. Files reuses tracked paths while the local Git index
 checksum is unchanged; remote or unreadable indexes keep fresh Git reads. OpenCode usage reads
 connections and quotas without calculating spending statistics.

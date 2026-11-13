@@ -1,5 +1,5 @@
 export const GRAPH_LIMIT = 200;
-export const GRAPH_ROW_HEIGHT = 24;
+export const GRAPH_ROW_HEIGHT = 28;
 export const GRAPH_ARGS = ["log", "--all", "--topo-order", "--no-color", "--decorate=full", `--max-count=${GRAPH_LIMIT}`, "--format=%H%x00%h%x00%D%x00%s%x00%an%x00%ar%x00%P%x00%at"];
 
 export const HISTORY_ARGS = [...GRAPH_ARGS.filter(arg => arg !== "--all" && arg !== "--topo-order"), "--date-order", "HEAD"];

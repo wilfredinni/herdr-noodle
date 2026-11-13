@@ -102,7 +102,7 @@ test('selecting a Graph commit opens its real file diff in the shared preview', 
   const hash = git(root, 'rev-parse', 'HEAD').trim();
   h.view.selectView('history', h.cx); await h.flush();
   const history = h.view.render(h.cx);
-  assert.equal(find(history, `commit-${hash}`).attrs.h[0], 24);
+  assert.equal(find(history, `commit-${hash}`).attrs.h[0], 28);
   assert.doesNotMatch(texts(history), /\d+ commits\b|All changed files in/);
   h.view.view = 'graph'; h.view.pickCommit({ fullHash: hash }, h.cx); await h.flush();
   const selection = h.state.get('git-file-preview.tab');
@@ -278,4 +278,36 @@ test('undoing a merge returns to its first parent and keeps the merged content s
   assert.deepEqual(h.errors, []); assert.equal(git(root, 'rev-parse', 'HEAD').trim(), parent);
   assert.equal(git(root, 'show', ':topic.txt'), 'topic\n');
   assert.equal(fs.readFileSync(path.join(root, 'topic.txt'), 'utf8'), 'topic\n');
+});
+
+test('preview action bridge uses the existing Git guards and opens file history', async t => {
+  const root = fixture(t); fs.writeFileSync(path.join(root, 'a.txt'), 'preview work\n');
+  const h = harness(root); await h.flush(); h.view.openFile(h.view.files[0], null, h.cx, { diffMode: 'unstaged' });
+  const selectionKey = 'git-file-preview.tab'; let selection = h.state.get(selectionKey), id = 0;
+  const request = async action => {
+    h.state.set(`${selectionKey}.action`, { id: ++id, action, selection });
+    h.view.render(h.cx); await h.flush();
+    assert.equal(h.state.get(`${selectionKey}.result`).id, id);
+  };
+  await request('stage'); assert.equal(git(root, 'show', ':a.txt'), 'preview work\n');
+  await request('unstage'); assert.equal(git(root, 'diff', '--cached', '--name-only'), '');
+  h.state.set(`${selectionKey}.history`, { root: selection.root, on: selection.on, path: 'a.txt', sequence: 1 });
+  h.view.render(h.cx); await h.flush(); assert.equal(h.view.view, 'history'); assert.equal(h.view.historyPath, 'a.txt');
+  // Opening history updates the preview, so reselect the working file before sending another action.
+  h.view.openFile(h.view.files[0], null, h.cx); selection = h.state.get(selectionKey);
+  git(root, 'add', '.'); git(root, 'commit', '-qm', 'External commit');
+  fs.writeFileSync(path.join(root, 'a.txt'), 'preserve this newer work\n');
+  await request('discard'); assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'preserve this newer work\n');
+  assert.match(h.errors.at(-1), /branch changed/);
+});
+
+test('preview requests cannot mutate another selection or a historical commit', async t => {
+  const root = fixture(t); fs.writeFileSync(path.join(root, 'a.txt'), 'working\n');
+  const h = harness(root); await h.flush(); h.view.openFile(h.view.files[0], null, h.cx);
+  const key = 'git-file-preview.tab', selection = h.state.get(key);
+  h.state.set(`${key}.action`, { id: 'old', action: 'discard', selection: { ...selection, hash: h.view.head } });
+  h.view.render(h.cx); await h.flush(); assert.ok(h.state.get(`${key}.result`).error);
+  h.state.set(`${key}.action`, { id: 'changed', action: 'discard', selection }); h.state.set(key, { ...selection, diffMode: 'staged' });
+  h.view.render(h.cx); await h.flush(); assert.ok(h.state.get(`${key}.result`).error);
+  assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'working\n');
 });

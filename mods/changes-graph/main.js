@@ -1,6 +1,6 @@
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, Tabs, Tab, Button, Checkbox, Popover } from "gpui-base";
-import { spaces, panes, focused, exec, watchFolder, theme, settings, run, shared, setShared } from "herdr";
+import { spaces, panes, focused, exec, watchFolder, theme, settings, run, shared, setShared, appHome, readTextFile } from "herdr";
 import { GRAPH_ARGS, HISTORY_ARGS, GRAPH_LIMIT, GRAPH_ROW_HEIGHT, graphRows, COMMIT_FORMAT, commitDetail, refLabels, shortAge } from "./graph.js";
 import { GitToolbar } from "./gitToolbar.js";
 import { showGitError } from "./gitError.js";
@@ -8,7 +8,7 @@ import { FileActions } from "./fileActions.js";
 import { CommitGenerator } from "./commitGenerator.js";
 import { Repositories } from "./repositories.js";
 import { StashPanel } from "./stashPanel.js";
-import { git } from "./fileOps.js";
+import { git, stage, trash, addIgnore } from "./fileOps.js";
 
 function sourceLocation() {
   const space = spaces().find((s) => s.active), f = focused();
@@ -233,7 +233,7 @@ export default class Changes extends View {
         if (key() === context && this.selectedCommit === row.fullHash) {
           this.detail = commitDetail(metadata, statuses, stats);
           const file = this.detail.files.find(file => file.path === this.historyPath) || this.detail.files[0];
-          if (file) this.openFile(file, this.detail, cx);
+          this.openFile(file || null, this.detail, cx);
         }
       } catch (error) { if (key() === context && this.selectedCommit === row.fullHash) this.detailError = String(error); }
       cx.notify();
@@ -335,7 +335,7 @@ export default class Changes extends View {
               .child(div().w(66).flex_none().child("Commit")))
             .child(div().flex_1().min_h(0).relative()
               .child(v_flex().id(`${id}-list`).absolute().inset_0().overflow_y_scroll()
-                .when(!history && this.files.length > 0, el => el.child(Button.new("graph-uncommitted").h_flex().h(24).px(14).gap(8).flex_none().items_center().bg("#00000000").text_size(12).text_color(t.muted)
+                .when(!history && this.files.length > 0, el => el.child(Button.new("graph-uncommitted").h_flex().h(GRAPH_ROW_HEIGHT).px(14).gap(8).flex_none().items_center().bg("#00000000").text_size(12).text_color(t.muted)
                   .accessibility_label(`Show ${this.files.length} uncommitted changes`).hover(e => e.bg(t.hover)).on_click((_e, cx) => this.selectView("changes", cx))
                   .child(svg("mods/changes-graph/changes.svg").size(14)).child(`Uncommitted changes (${this.files.length})`)))
                 .children(rows.map(row => this.graphRow(row, width, t)))
@@ -353,11 +353,50 @@ export default class Changes extends View {
     const source = all.find(p => p.pane === focus.pane && p.terminal) || all.find(p => p.tab === focus.tab && p.terminal);
     if (!source) { this.note = "Open a terminal pane in this tab before opening a file preview"; cx.notify(); return; }
     const selectionKey = `git-file-preview.${focus.tab}`;
-    setShared(selectionKey, { root: this.root, on: this.on, file, hash: commit?.hash ?? null, parent: commit?.parents[0] ?? null, hasHead: this.hasHead, sourcePane: source.pane, ...options });
+    const metadata = commit ? { ...commit, age: shortAge(Date.parse(commit.date) / 1000), add: commit.files.reduce((n, f) => n + (f.add || 0), 0), del: commit.files.reduce((n, f) => n + (f.del || 0), 0), fileCount: commit.files.length, files: commit.files.slice(0, 1000) } : null;
+    setShared(selectionKey, { root: this.root, on: this.on, file, hash: commit?.hash ?? null, parent: commit?.parents[0] ?? null, commit: metadata, branch: this.branch, head: this.head, hasHead: this.hasHead, sourcePane: source.pane, ...options });
     if (existing) run("pane.focus", { pane: existing.pane });
     else run("pane.split", { pane: source.pane, direction: "right", mod: "git-file-preview", props: { selectionKey } });
-    if (!commit) { this.open = file.path; this.openMode = options.diffMode || "all"; }
+    if (!commit && file) { this.open = file.path; this.openMode = options.diffMode || "all"; }
     this.note = null; cx.notify();
+  }
+
+  previewAction(cx) {
+    const selectionKey = `git-file-preview.${focused()?.tab}`, request = shared(`${selectionKey}.action`);
+    if (!request || request.id === this.previewActionId || shared(`${selectionKey}.result`)?.id === request.id || this.busy || this.loading) return;
+    this.previewActionId = request.id;
+    const selection = request.selection, path = selection?.file?.path;
+    const finish = error => setShared(`${selectionKey}.result`, { id: request.id, error });
+    if (!selection || selection.hash || selection.root !== this.root || selection.on !== this.on ||
+        JSON.stringify(selection) !== JSON.stringify(shared(selectionKey)) || !path || /^(?:[\\/]|[a-z]:)|\0/i.test(path) || path.split(/[\\/]/).includes("..")) {
+      cx.spawn(async () => finish("The preview changed. Open the file again before changing it.")); return;
+    }
+    const context = this.context, snapshot = { ...this.fileActions.snapshot(), head: selection.head, branch: selection.branch };
+    const file = this.files.find(file => file.path === path);
+    const labels = { stage: "Stage file", unstage: "Unstage file", ignore: "Ignore file", exclude: "Exclude file", discard: "Discard changes", trash: "Move to Trash", resolve: "Resolve conflict" };
+    if (!file || !labels[request.action]) { cx.spawn(async () => finish("The file changed. Review its current status first.")); return; }
+    cx.spawn(async cx => {
+      setShared(`${selectionKey}.action`, null);
+      if (context !== key() || JSON.stringify(selection) !== JSON.stringify(shared(selectionKey))) { finish("The repository changed. Review the file again."); return; }
+      if (!this.fileActions.enabled()) { finish("Git is busy. Review the file and try again."); return; }
+      this.fileActions.run(labels[request.action], async s => {
+        if (JSON.stringify(selection) !== JSON.stringify(shared(selectionKey))) throw new Error("The preview changed. Review the file again.");
+        switch (request.action) {
+          case "stage": if (file.status === "U") throw new Error("Review and resolve the conflict before staging."); await stage([path], true, s); break;
+          case "unstage": await stage([path], false, s); break;
+          case "ignore": case "exclude": await addIgnore(path, request.action === "exclude", s); break;
+          case "trash": await trash([path], s); break;
+          case "discard": if (file.status === "U") throw new Error("Review and resolve the conflict first."); await git(["restore", "--worktree", "--", path], s); break;
+          case "resolve": {
+            const script = await readTextFile(`${appHome()}/mods/git-file-preview/conflict.py`);
+            if (!script || typeof request.signature !== "string" || !/^[a-f0-9]{64}$/.test(request.signature) || !["ours", "theirs", "both", "resolved"].includes(request.choice)) throw new Error("Invalid conflict review. Open it again.");
+            const result = await exec("python3", ["-c", script, s.root, path, request.choice, request.signature, s.head, s.branch || ""], { cwd: s.root, on: s.on });
+            if (result.code !== 0) throw new Error(result.stderr || "Cannot resolve this conflict");
+            break;
+          }
+        }
+      }, cx, snapshot, () => finish(null));
+    });
   }
 
   fileCheckbox(id, checked, label, change, t, mixed, disabled) {
@@ -431,7 +470,7 @@ export default class Changes extends View {
         .when(!this.collapsed[mode], el => el.children(entries.map(file => {
           const parts = file.path.split("/"), name = parts.pop(), id = `${mode}-${file.path}:${file.fresh ? "untracked" : "tracked"}`;
           const status = (mode === "staged" ? file.indexStatus : file.worktreeStatus)?.trim().replace("?", "A") || file.status;
-          const row = h_flex().id(`change-${id}`).h(32).flex_none().px(8).gap(8).items_center().rounded(4).cursor_pointer()
+          const row = h_flex().id(`change-${id}`).h(GRAPH_ROW_HEIGHT).flex_none().px(8).gap(8).items_center().rounded(4).cursor_pointer()
             .bg(this.open === file.path && this.openMode === mode ? t.selected : "#00000000").hover(el => el.bg(t.hover))
             .on_click((_e, cx) => this.openFile(file, null, cx, { diffMode: mode }))
             .child(div().w(12).flex_none().text_size(11).text_color(status === "A" ? t.ansi2 : status === "D" || status === "U" ? t.ansi1 : t.ansi3).child(status))
@@ -490,6 +529,15 @@ export default class Changes extends View {
     this.repositories.refresh(cx);
     const current = key() === this.context;
     if (!current) this.refresh(cx);
+    this.previewAction(cx);
+    const request = shared(`git-file-preview.${focused()?.tab}.history`), requestId = JSON.stringify(request);
+    if (request && requestId !== this.previewHistoryRequest) {
+      this.previewHistoryRequest = requestId;
+      if (request.root === this.root && request.on === this.on && typeof request.path === "string") {
+        const context = this.context;
+        cx.spawn(async cx => { if (context === key()) this.showFileHistory(request.path, cx); });
+      }
+    }
     const t = theme(), add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
     const selectedCount = this.files.filter(f => f.staged).length, conflicts = this.files.some(file => file.status === "U");
     const hasMessage = Boolean(this.files.length && this.message.trim() && this.root && current);

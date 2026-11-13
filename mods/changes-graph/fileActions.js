@@ -39,7 +39,7 @@ export class FileActions {
     });
   }
 
-  run(label, task, cx, snapshot = this.snapshot()) {
+  run(label, task, cx, snapshot = this.snapshot(), complete) {
     if (!this.enabled() || !this.current(snapshot)) return;
     const p = this.owner, s = snapshot;
     this.openKind = null; this.sequence++; p.busy = true; p.note = null;
@@ -49,7 +49,7 @@ export class FileActions {
         if (!this.current(s)) throw new Error("Repository changed. Review the changes and try again.");
         await task(s);
       } catch (e) { if (this.current(s)) showGitError(label, e, s); }
-      finally { p.busy = false; p.refresh(cx); cx.notify(); }
+      finally { p.busy = false; p.refresh(cx); complete?.(cx); cx.notify(); }
     });
     cx.notify();
   }
