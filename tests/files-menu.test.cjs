@@ -93,3 +93,17 @@ test('tree replaces the renamed row and inserts new items at their actual depth'
  h.tools.targetDir=false;h.tools.operation('rename','src/old.md',h.cx);
  rows=h.c.Files.prototype.rows.call(h.owner,'',0,[],{});assert.equal(rows[1].id,'files-inline-operation');assert.ok(!rows.some(row=>row.id==='file-src/old.md'));assert.equal(rows.length,3);
 });
+
+test('Quick Open starts immediately and coalesces typing while rejecting stale results',async()=>{
+ const h=tools(),timers=[];h.cx.timer={after(ms,fn){timers.push({ms,fn});}};
+ let first;
+ h.c.exec=async(_cmd,args)=>{h.calls.push([args[1],JSON.parse(args[2])]);if(args[1]==='search')return new Promise(resolve=>{first=resolve;});return{code:0,stdout:'{}'};};
+ h.tools.show('files',h.cx);assert.equal(timers[0].ms,0);assert.equal(h.calls.length,0);
+ timers.shift().fn(h.cx);assert.equal(h.calls[0][0],'search');
+ h.tools.query.set_value('m');h.tools.query.emit('change');h.tools.query.set_value('main');h.tools.query.emit('change');
+ assert.ok(timers.every(timer=>timer.ms===150));
+ first({code:0,stdout:JSON.stringify({items:[{path:'old'}],incomplete:false})});await h.flush();assert.equal(h.tools.results.length,0);
+ h.c.exec=async(_cmd,args)=>{h.calls.push([args[1],JSON.parse(args[2])]);return{code:0,stdout:JSON.stringify({items:[{path:'main.js'}],incomplete:false})};};
+ timers.forEach(timer=>timer.fn(h.cx));await h.flush();
+ assert.equal(h.calls.filter(([action])=>action==='search').length,2);assert.equal(h.calls.at(-1)[1].query,'main');assert.equal(h.tools.results[0].path,'main.js');assert.equal(h.tools.searching,false);
+});

@@ -53,9 +53,14 @@ export default class Files extends View {
     if (typeof FileTools !== "undefined") { this.tools = new FileTools(this, cx); this.tasks = new Tasks(this); }
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.git = gitState(null);
     const options = typeof props === "function" ? props() : _props;
-    this.palette = Boolean(options?.palette);
+    this.palette = Boolean(options?.palette || options?.overlay);
     if (this.palette) {
-      this.root = options.root; this.on = options.on; this.context = { key: key() }; this.git = gitState(options.gitRoot || null);
+      const where = location(), repo = shared(`git.repository.${where.space}`);
+      this.root = options.root || where.cwd; this.on = options.palette ? options.on : where.on; this.context = { key: key() };
+      this.git = gitState(options.gitRoot || (repo?.workspace === where.workspace && repo.on === this.on ? repo.root : null));
+      if (!this.root || this.on) {
+        this.tools.mode = "files"; this.tools.query.focus(); this.tools.error = this.on ? "Quick Open is available for local folders only." : "Open a folder before searching for files."; return;
+      }
       this.tools.show(options.mode || "files", cx); return;
     }
     if (typeof nextCommand !== "undefined") cx.spawn(async cx => { for (;;) {

@@ -19,15 +19,15 @@ export class FileTools {
   }
   show(mode, cx) {
     this.mode = mode; this.error = null; this.results = []; this.at = 0;
-    if (["files", "content"].includes(mode)) { this.query.focus(); this.search(cx); }
+    if (["files", "content"].includes(mode)) { this.query.focus(); this.search(cx, 0); }
     cx.notify();
   }
-  search(cx) {
+  search(cx, delay = 150) {
     const sequence = this.sequence = (this.sequence || 0) + 1;
     const root = this.owner.root, mode = this.mode, query = this.query.value(), matchCase = this.matchCase;
     this.searching = true;
-    cx.spawn(async () => { try { await workspaceCall("search_cancel", { client: this.client, sequence }); } catch {} });
-    cx.timer.after(150, cx => {
+    if (sequence > 1) cx.spawn(async () => { try { await workspaceCall("search_cancel", { client: this.client, sequence }); } catch {} });
+    cx.timer.after(delay, cx => {
       if (sequence !== this.sequence) return;
       cx.spawn(async cx => {
         try {

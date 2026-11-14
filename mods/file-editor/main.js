@@ -2,6 +2,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button } from "gpui-base";
 import { shared, setShared, theme, props, focused, panes, run } from "herdr";
 import { Documents } from "./documents.js";
+import { fileIcon } from "./fileIcons.js";
 
 export default class FileEditor extends View {
   init(_props, cx) {
@@ -50,12 +51,14 @@ export default class FileEditor extends View {
       cx.spawn(cx => { this.refreshPending = false; this.refresh(cx); });
     }
     const t = theme(), s = this.selection, file = s?.file;
+    const icon = file ? fileIcon(file.path.split(/[\\/]/).pop()) : null;
     const ok = this.editable();
     return v_flex().id("file-editor").size_full().min_w(0).min_h(0).bg(t.canvas).text_color(t.foreground).text_size(12)
       .child(h_flex().h(40).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).bg(t.background)
         .child(Button.new("close-editor").size(26).flex().items_center().justify_center().flex_none().rounded(4).bg("#00000000").text_color(t.muted)
           .accessibility_label("Close editor").tooltip("Close editor").hover(el => el.bg(t.hover))
           .on_click(() => this.closePane()).child(svg("mods/pane/close.svg").size(14)))
+        .when(Boolean(icon), el => el.child(svg(icon.path).size(16).flex_none().text_color(t[icon.color])))
         .child(div().flex_1().min_w(0).truncate().font_semibold().tooltip(file ? `${s.root}/${file.path}` : "File editor")
           .child(file ? file.path.split(/[\\/]/).pop() : "File editor"))
         .child(div().flex_none().text_size(11).text_color(t.muted)

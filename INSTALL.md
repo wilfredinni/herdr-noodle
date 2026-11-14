@@ -40,6 +40,11 @@ If a mod is renamed, update its layout references, self-opening mod names, asset
 
 ## Validate on the destination
 
+For Quick Open, merge `"cmd-p": "mod.open:files-browser"` into the existing
+`"layout:noodle"` section of the destination's `keys.json` (`ctrl-p` on Linux).
+Use the built-in `mod.open` command so the shortcut works when Files is hidden
+or Changes is selected. Do not replace the rest of the user's key bindings.
+
 Replace `<HerdrHome>` and any renamed mod/layout names in these commands:
 
 ```sh

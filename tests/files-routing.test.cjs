@@ -11,15 +11,16 @@ function load(context, file, names) {
 }
 
 function harness() {
-  const state = new Map(), commands = [];
+  const state = new Map(), commands = [], timers = [];
   const panes = [{ pane: 'terminal', tab: 'one', terminal: 't', cwd: '/workspace/repo' }, { pane: 'diff', tab: 'one', mod: 'git-file-preview' }];
   let focus = 'terminal';
-  const cx = { notify() {}, focus_handle: () => ({ focus() {} }) };
+  const cx = { notify() {}, focus_handle: () => ({ focus() {} }), timer: { after(ms, fn) { timers.push({ ms, fn }); } }, spawn() {} };
   const context = vm.createContext({ View: class {}, Map, Set, Date, JSON,
     spaces: () => [{ id: 's', active: true, folder: '/workspace', machine: null }],
     panes: () => panes, focused: () => ({ pane: focus, tab: 'one' }),
     shared: key => state.get(key), setShared: (key, value) => state.set(key, value),
-    run: (name, args) => commands.push({ name, args }), InputState: { new: () => ({ on() {} }) },
+    run: (name, args) => commands.push({ name, args }), Tasks: class {},
+    InputState: { new: () => ({ on() {}, focus() { this.focused = true; }, value: () => '' }) },
   });
   load(context, 'files-browser/gitState.js', 'gitState, fileState');
   load(context, 'files-browser/main.js', 'Files, location, key');
@@ -27,7 +28,7 @@ function harness() {
   load(context, 'changes-graph/main.js', 'Changes, sourceLocation');
   const files = new context.Files();
   Object.assign(files, { root: '/workspace/repo', on: null, git: context.gitState('/workspace/repo'), context: { key: context.key() } });
-  return { files, context, state, commands, panes, cx, focus(pane) { focus = pane; } };
+  return { files, context, state, commands, panes, cx, timers, focus(pane) { focus = pane; } };
 }
 
 test('Files opens and reuses its editor without replacing or focusing the Changes diff', () => {
@@ -63,4 +64,43 @@ test('View History selects Changes history without opening a file or touching ei
   assert.equal(h.commands.length, 1); assert.equal(h.commands[0].name, 'layout.select');
   assert.equal(h.commands[0].args.child, 'changes');
   assert.equal(h.state.get('git-file-preview.one'), undefined); assert.equal(h.state.get('file-editor.one'), undefined);
+});
+
+test('mod.open initializes Quick Open without a visible Files panel or a Git refresh', () => {
+  const h = harness();
+  h.context.props = () => ({ overlay: 'quick-open' });
+  h.state.set('git.repository.s', { workspace: '/workspace/repo', on: null, root: '/workspace/repo/nested' });
+  h.files.refresh = () => { throw Error('Quick Open must not scan the file tree or Git status'); };
+  h.files.init({}, h.cx);
+  assert.equal(h.files.palette, true);
+  assert.equal(h.files.root, '/workspace/repo/nested');
+  assert.equal(h.files.git.root, '/workspace/repo/nested');
+  assert.equal(h.files.tools.mode, 'files');
+  assert.equal(h.files.tools.query.focused, true);
+  assert.equal(h.timers[0].ms, 0);
+  const config = JSON.parse(fs.readFileSync(path.join(__dirname, '../mods/files-browser/mod.json')));
+  assert.equal(config.overlay.kind, 'dialog');
+  assert.equal(config.overlay.width, 680);
+});
+
+test('Quick Open respects workspace scope and existing explicit content-search props', () => {
+  const h = harness();
+  h.state.set('git.repository.s', { workspace: '/workspace/repo', on: null, root: '/workspace/repo/nested' });
+  h.state.set('noodle.files.scope.s', 'workspace');
+  h.context.props = () => ({ overlay: 'quick-open' });
+  h.files.init({}, h.cx);
+  assert.equal(h.files.root, '/workspace/repo');
+  h.context.props = () => ({ overlay: 'content', palette: true, mode: 'content', root: '/explicit', on: null });
+  h.files.init({}, h.cx);
+  assert.equal(h.files.root, '/explicit');
+  assert.equal(h.files.tools.mode, 'content');
+});
+
+test('remote Quick Open reports its local-only limit without starting search', () => {
+  const h = harness();
+  h.context.spaces = () => [{ id: 's', active: true, folder: '/remote', machine: 'server' }];
+  h.context.props = () => ({ overlay: 'quick-open' });
+  h.files.init({}, h.cx);
+  assert.match(h.files.tools.error, /local folders only/);
+  assert.equal(h.timers.length, 0);
 });
