@@ -2,7 +2,7 @@ import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, Tabs, Tab, Button, Checkbox, Popover } from "gpui-base";
 import { spaces, panes, focused, exec, watchFolder, theme, settings, run, shared, setShared, appHome, readTextFile } from "herdr";
 import { GRAPH_ARGS, HISTORY_ARGS, GRAPH_LIMIT, GRAPH_ROW_HEIGHT, graphRows, COMMIT_FORMAT, commitDetail, refLabels, shortAge } from "./graph.js";
-import { GitToolbar } from "./gitToolbar.js";
+import { GitToolbar, worktreeRows } from "./gitToolbar.js";
 import { showGitError } from "./gitError.js";
 import { FileActions } from "./fileActions.js";
 import { CommitGenerator } from "./commitGenerator.js";
@@ -98,6 +98,11 @@ export default class Changes extends View {
           return;
         }
         const root = top.stdout.trim(), git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
+        let mainWorktree = this.mainWorktree;
+        if (changedContext) {
+          const worktrees = await git(["worktree", "list", "--porcelain", "-z"]);
+          mainWorktree = worktrees.code === 0 ? worktreeRows(worktrees.stdout).find(row => row.main)?.root : null;
+        }
         const status = await git(["status", "--porcelain=v1", "-z", "--branch", "--no-renames", "--untracked-files=all"]);
         if (status.code !== 0) throw new Error(status.stderr);
         const head = await git(["rev-parse", "--verify", "HEAD"]);
@@ -133,7 +138,7 @@ export default class Changes extends View {
           files.push({ path, status: s, fresh, indexStatus: xy[0], worktreeStatus: xy[1], staged: !fresh && xy[0] !== " " && xy[0] !== "?", unstaged: fresh || xy[1] !== " ", ...stat });
         }
         if (key() !== context) return;
-        this.root = root; this.on = on; this.hasHead = head.code === 0; this.files = files; this.limited = entries.length > 1000; this.error = null;
+        this.root = root; this.mainWorktree = mainWorktree; this.on = on; this.hasHead = head.code === 0; this.files = files; this.limited = entries.length > 1000; this.error = null;
         this.branch = branch.code === 0 ? branch.stdout.trim().replace(/^refs\/heads\//, "") : null;
         if (this.head !== hash) { this.undoOpen = false; this.undoSnapshot = null; }
         this.head = hash; this.lastCommit = lastCommit;

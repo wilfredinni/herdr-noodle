@@ -25,18 +25,21 @@ const find = (n, id) => n?.id === id ? n : n?.nodes?.map(child => find(child, id
 const texts = n => typeof n === 'string' ? n : (n?.nodes || []).map(texts).join(' ');
 function harness(selection) {
   const state = new Map([['selection', selection]]), jobs = [], calls = [];
-  const cx = { notify() {}, timer: { every() {} }, spawn(fn) { jobs.push(fn(cx)); } };
+  const cx = { notify() {}, stop_propagation() {}, focus_handle: () => ({ focus() {} }), timer: { every() {} }, spawn(fn) { jobs.push(fn(cx)); } };
   const host = {
     exec: async (command, args, options) => { calls.push([command, args]); try { return { code: 0, stdout: execFileSync(command, args, { cwd: options.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) }; } catch (e) { return { code: e.status, stderr: e.stderr.toString() }; } },
     readTextFile: async file => fs.promises.readFile(file, 'utf8'),
   };
   const c = vm.createContext({ View: class {}, div: element, svg: () => element(), v_flex: element, h_flex: element,
     Button: { new: element }, Popover: { new: element }, Scrollbar: { vertical: element }, TextView: { markdown: element }, v_virtual_list: element,
+    Input: { new: element }, InputState: { new: () => { let value = ''; return { on() {}, set_value(next) { value = next; }, value: () => value }; } },
+    ScrollHandle: { new: () => ({ scroll_to_item() {} }) }, VirtualListScrollHandle: { new: () => ({}) }, appHome: () => '/fixture-app',
     props: () => ({ selectionKey: 'selection' }), shared: key => state.get(key), setShared: (key, value) => state.set(key, value),
     theme: () => new Proxy({}, { get: (_, key) => key }), settings: () => ({}), focused: () => ({ tab: 'tab' }), panes: () => [], run() {},
     ...host, highlightRows: async () => {},
   });
   load(c, 'gutter.js', ['lineChanges']); load(c, 'content.js', ['isMarkdown', 'splitRows', 'diffRows', 'readFile', 'readDiff', 'readSource', 'readMarkdown', 'git']);
+  load(c, 'review.js', ['Review']);
   load(c, 'main.js', ['FilePreview']);
   const view = new c.FilePreview(); view.watch = () => {}; view.init({}, cx);
   return { c, view, state, cx, host, calls, async flush() { while (jobs.length) await Promise.all(jobs.splice(0)); } };
@@ -55,6 +58,51 @@ test('unified line numbers and split pairs preserve hunk positions and unequal r
   assert.equal(pairs[2].before.text, 'old1'); assert.equal(pairs[2].after.text, 'new1');
   assert.equal(pairs[4].before, undefined); assert.equal(pairs[4].after.text, 'new3');
   assert.equal(pairs[5].before.kind, '@'); assert.equal(pairs[6].after.newNumber, 40);
+});
+
+test('Review uses shared segmented selectors and compares a branch picked with the keyboard', async t => {
+  const h = harness({ root: fixture(t), on: null, file: { path: 'a.md', status: 'M' } }); await h.flush();
+  const requests = [];
+  h.c.exec = async (_command, args) => {
+    const action = args[1], request = JSON.parse(args[2]); requests.push({ action, request });
+    const result = action === 'review_branches' ? { branches: [{ name: 'main', ref: 'refs/heads/main' }, { name: 'origin/topic', ref: 'refs/remotes/origin/topic' }] }
+      : action === 'review_compare' ? { base: 'a'.repeat(40), head: 'b'.repeat(40), files: [] } : { hunks: [], mode: 'unstaged' };
+    return { code: 0, stdout: JSON.stringify(result) };
+  };
+  let tree = h.view.render(h.cx);
+  assert.ok(find(tree, 'file-mode-review')); assert.equal(find(tree, 'open-review-tools'), undefined);
+  find(tree, 'file-mode-review').handlers.click({}, h.cx); await h.flush();
+  assert.equal(h.view.mode, 'review'); assert.equal(h.view.review.mode, 'hunks');
+  tree = h.view.render(h.cx);
+  for (const mode of ['hunks', 'compare', 'pr']) assert.ok(find(tree, `review-mode-${mode}`));
+  assert.equal(find(tree, 'review-hunks'), undefined);
+  find(tree, 'review-mode-compare').handlers.click({}, h.cx); await h.flush();
+  tree = h.view.render(h.cx); assert.equal(find(tree, 'compare-ref').attrs.disabled[0], true);
+  assert.ok(find(tree, 'review-branch-refs/remotes/origin/topic'));
+  h.view.review.search.set_value('topic'); h.view.review.at = 0;
+  tree = h.view.render(h.cx);
+  const picker = find(tree, 'review-branch-picker');
+  picker.nodes.at(-1).handlers.key_down({ key: 'enter' }, h.cx);
+  tree = h.view.render(h.cx); find(tree, 'compare-ref').handlers.click({}, h.cx); await h.flush();
+  assert.equal(requests.at(-1).request.ref, 'refs/remotes/origin/topic');
+  assert.equal(h.view.review.busy, false);
+});
+
+test('file hunks reuse colored diff rows and keep staging tokens when syntax highlighting is unavailable', async t => {
+  const h = harness({ root: fixture(t), on: null, hasHead: true, file: { path: 'a.md', status: 'M' } }); await h.flush();
+  const highlighted = [];
+  h.c.highlightRows = async (selection, rows) => { highlighted.push(selection.diffMode); rows.find(row => row.kind === '+').spans = [{ text: 'new', color: 5 }]; };
+  h.c.exec = async () => ({ code: 0, stdout: JSON.stringify({ token: 'snapshot', mode: 'unstaged', hunks: ['@@ -1 +1 @@\n-old\n+new\n'] }) });
+  h.view.selectMode('review', h.cx); await h.flush();
+  assert.deepEqual(highlighted, ['unstaged']); assert.equal(h.view.review.hunks.token, 'snapshot');
+  let tree = h.view.render(h.cx), hunk = find(tree, 'review-hunk-0');
+  assert.equal(hunk.nodes[1].attrs.bg[0], 'ansi118'); assert.equal(hunk.nodes[2].attrs.bg[0], 'ansi218');
+  assert.equal(h.view.review.hunks.rows[0][2].spans[0].color, 5);
+  h.view.result = { rows: h.view.review.hunks.rows.flat() };
+  h.c.highlightRows = async () => { throw new Error('bat unavailable'); };
+  h.view.review.load(h.cx); await h.flush(); tree = h.view.render(h.cx);
+  assert.match(texts(tree), /bat unavailable/); assert.ok(find(tree, 'stage-hunk-0'));
+  assert.equal(h.view.review.hunks.rows[0][2].spans[0].color, 5, 'reuse matching syntax colors from the diff');
 });
 
 test('Edit opens or focuses the separate editor and keeps the preview open', async t => {

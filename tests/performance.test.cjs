@@ -51,7 +51,7 @@ test('Changes context reads stay constant as the changed-file list grows', () =>
   const h = harness(), c = h.context;
   h.cx.spawn = () => {};
   load(c, 'changes-graph/graph.js', ['GRAPH_ARGS', 'HISTORY_ARGS', 'GRAPH_LIMIT', 'GRAPH_ROW_HEIGHT', 'graphRows', 'COMMIT_FORMAT', 'commitDetail', 'refLabels', 'shortAge']);
-  load(c, 'changes-graph/gitToolbar.js', ['GitToolbar']);
+  load(c, 'changes-graph/gitToolbar.js', ['GitToolbar', 'worktreeRows']);
   load(c, 'changes-graph/fileActions.js', ['FileActions']);
   load(c, 'changes-graph/commitGenerator.js', ['CommitGenerator']);
   load(c, 'changes-graph/repositories.js', ['Repositories']);

@@ -8,7 +8,7 @@ export default class FilePreview extends View {
   init(_props, cx) {
     this.selectionKey = props()?.selectionKey || _props?.selectionKey || "git-file-preview.unselected"; this.rows = []; this.mode = "diff"; this.version = 0;
     this.layout = "unified";
-    if (typeof Review !== "undefined") { this.review = new Review(this); this.scroll = VirtualListScrollHandle.new(); }
+    if (typeof Review !== "undefined") { this.review = new Review(this, cx); this.scroll = VirtualListScrollHandle.new(); }
     const owners = shared("noodle.documents") || {};
     if (Object.values(owners).some(doc => doc.key === this.selectionKey))
       setShared("noodle.documents", Object.fromEntries(Object.entries(owners).filter(([_id, doc]) => doc.key !== this.selectionKey)));
@@ -55,6 +55,7 @@ export default class FilePreview extends View {
     const selection = shared(this.selectionKey), context = JSON.stringify(selection);
     if (!selection || (!force && context === this.context) || (context === this.context && this.loading)) return;
     if (context !== this.context) {
+      this.review?.reset();
       const previous = this.selection;
       const sameFile = previous && previous.root === selection.root && previous.on === selection.on && previous.file?.path === selection.file?.path && previous.hash === selection.hash && previous.kind === selection.kind && previous.diffMode === selection.diffMode;
       if (!sameFile) this.mode = /\.(png|jpe?g|svg)$/i.test(selection.file?.path || "") && !selection.on && !selection.hash ? "asset" : selection.kind === "file" ? "source" : "diff";
@@ -177,6 +178,7 @@ export default class FilePreview extends View {
       this.openFile(this.selection.file, null, cx, { kind: "diff" }); return;
     }
     this.mode = mode;
+    if (mode === "review") this.review.show(this.selection.hash ? "compare" : "hunks", cx);
     if (mode === "asset") cx.spawn(async cx => { try { await this.loadAsset(cx); } catch (e) { this.error = e.message; cx.notify(); } });
     if (mode === "source" && this.selection.kind !== "file" && !this.source && !this.sourceLoading) cx.spawn(cx => this.loadSource(cx));
     if (mode === "markdown" && !this.markdown && !this.markdownLoading) cx.spawn(cx => this.loadMarkdown(cx));
@@ -370,8 +372,7 @@ export default class FilePreview extends View {
       .when(Boolean(this.actionError), el => el.child(div().px(16).py(8).text_size(12).text_color(t.ansi1).child(this.actionError)))
       .when(Boolean(this.pending), el => el.child(div().px(16).py(8).text_size(11).text_color(t.muted).child("Applying Git action…")))
       .when(Boolean(file), el => el.child(h_flex().h(44).flex_none().px(14).gap(10).items_center().border_b(1).border_color(t.border).overflow_x_scrollbar()
-        .when(Boolean(this.review && !s.on), el => el.child(Button.new("open-review-tools").h(28).px(8).rounded(5).text_size(12).child("Review").on_click((_e, cx) => { this.mode = "review"; this.review.mode = "compare"; cx.notify(); })))
-        .child(this.segments("file-mode", [...(s.gitRoot === null ? [] : [["diff", "Diff"]]), ["source", "Source"], ...(isMarkdown(file.path) ? [["markdown", "Preview"]] : []), ...(/\.(png|jpe?g|svg)$/i.test(file.path) && !s.on && !s.hash ? [["asset", "Image"]] : [])], this.mode, (mode, cx) => this.selectMode(mode, cx), t))
+        .child(this.segments("file-mode", [...(s.gitRoot === null ? [] : [["diff", "Diff"]]), ["source", "Source"], ...(this.review && !s.on && s.gitRoot !== null ? [["review", "Review"]] : []), ...(isMarkdown(file.path) ? [["markdown", "Preview"]] : []), ...(/\.(png|jpe?g|svg)$/i.test(file.path) && !s.on && !s.hash ? [["asset", "Image"]] : [])], this.mode, (mode, cx) => this.selectMode(mode, cx), t))
         .child(div().flex_none().text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().flex_none().text_size(11).text_color(t.ansi1).child(`−${del}`))
         .child(div().flex_1())
         .when(this.mode === "diff", el => el.child(this.segments("diff-layout", [["unified", "Unified"], ["split", "Split"]], this.layout, (layout, cx) => { this.layout = layout; cx.notify(); }, t)))))

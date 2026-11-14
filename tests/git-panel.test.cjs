@@ -50,7 +50,7 @@ function harness(root) {
   });
   load(c, 'graph.js', ['GRAPH_ARGS', 'HISTORY_ARGS', 'GRAPH_LIMIT', 'GRAPH_ROW_HEIGHT', 'graphRows', 'COMMIT_FORMAT', 'commitDetail', 'refLabels', 'shortAge']);
   load(c, 'fileOps.js', ['git', 'verify', 'stage', 'stashes', 'popStash', 'trash', 'addIgnore', 'changeStash']);
-  load(c, 'gitToolbar.js', ['GitToolbar']); load(c, 'fileActions.js', ['FileActions']); load(c, 'commitGenerator.js', ['CommitGenerator']);
+  load(c, 'gitToolbar.js', ['GitToolbar', 'worktreeRows']); load(c, 'fileActions.js', ['FileActions']); load(c, 'commitGenerator.js', ['CommitGenerator']);
   load(c, 'stashPanel.js', ['StashPanel']); load(c, 'main.js', ['Changes', 'upstreamState']);
   const view = new c.Changes(); view.watch = () => {}; view.init({}, cx); view.generator.machine = null;
   return { c, cx, view, state, t, errors, async flush() { while (jobs.length) await Promise.all(jobs.splice(0)); } };
@@ -322,4 +322,45 @@ test('commit composer, sync toolbar and last commit appear only in Changes and k
     for (const id of ids) assert.equal(Boolean(find(tree, id)), view === 'changes', `${view}: ${id}`);
     assert.equal(h.view.message, 'Keep this draft'); assert.equal(h.view.input.value(), 'Keep this draft');
   }
+});
+
+test('worktree selector precedes the branch, filters real linked checkouts and preserves drafts when switching', async t => {
+  const root = fs.realpathSync(fixture(t)), linked = root + '-checkout with\nnewline';
+  t.after(() => fs.rmSync(linked, { recursive: true, force: true }));
+  git(root, 'worktree', 'add', '-b', 'feature', linked);
+  const h = harness(root); await h.flush();
+  load(h.c, 'repositories.js', ['Repositories']);
+  const workspace = () => ({ id: 's', folder: root, on: null });
+  h.view.repositories = new h.c.Repositories(h.view, workspace, h.cx);
+  h.view.repositories.context = JSON.stringify(workspace());
+  h.view.message = 'Main checkout draft'; h.view.input.set_value(h.view.message);
+  const toolbar = h.view.gitToolbar, tree = h.view.render(h.cx);
+  const row = find(tree, 'git-current-worktree'); assert.ok(row); assert.equal(texts(row).trim(), 'main');
+  const collect = n => [n?.id, ...(n?.nodes || []).flatMap(collect)];
+  const ids = collect(tree); assert.ok(ids.indexOf('git-current-worktree') < ids.indexOf('git-current-branch'));
+  toolbar.show('worktrees', true, h.cx); await h.flush();
+  assert.deepEqual(Array.from(toolbar.worktrees, row => row.root), [root, linked]);
+  toolbar.search.set_value('feature'); assert.equal(toolbar.worktreeChoices().length, 1);
+  const target = toolbar.worktreeChoices()[0]; assert.equal(target.root, linked); assert.notEqual(target.name, 'main');
+  h.view.busy = true; toolbar.switchWorktree(target, h.cx); assert.equal(h.view.root, root); h.view.busy = false;
+  toolbar.switchWorktree(target, h.cx); await h.flush();
+  assert.equal(h.view.root, linked); assert.equal(h.view.branch, 'feature'); assert.equal(h.view.message, '');
+  assert.notEqual(texts(find(h.view.render(h.cx), 'git-current-worktree')).trim(), 'main');
+  assert.equal(h.state.get('git.repository.s').root, linked);
+  toolbar.show('worktrees', true, h.cx); await h.flush();
+  toolbar.switchWorktree(toolbar.worktrees.find(row => row.root === root), h.cx); await h.flush();
+  assert.equal(h.view.root, root); assert.equal(h.view.message, 'Main checkout draft');
+  const dialogs = []; h.c.openOverlay = options => dialogs.push(options);
+  toolbar.show('worktrees', true, h.cx); await h.flush(); toolbar.newWorktree(h.cx);
+  assert.equal(dialogs[0].mod, 'worktree'); assert.equal(dialogs[0].props.action, 'new'); assert.equal(dialogs[0].props.folder, root);
+  assert.equal(git(root, 'symbolic-ref', '--short', 'HEAD').trim(), 'main');
+});
+
+test('worktree parsing skips bare and prunable records and worktree selection rejects stale context', async t => {
+  const h = harness(fixture(t)); await h.flush();
+  const rows = h.c.worktreeRows('worktree /bare\0bare\0\0worktree /stale\0prunable gitdir missing\0\0worktree /detached\0HEAD abc\0detached\0\0');
+  assert.equal(rows.length, 1); assert.equal(rows[0].branch, 'Detached HEAD');
+  const toolbar = h.view.gitToolbar; toolbar.show('worktrees', true, h.cx); await h.flush();
+  const original = h.view.root; h.view.context = 'changed';
+  toolbar.switchWorktree(toolbar.worktrees[0], h.cx); assert.equal(h.view.root, original);
 });

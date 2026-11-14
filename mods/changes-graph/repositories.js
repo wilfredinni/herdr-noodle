@@ -32,10 +32,15 @@ export class Repositories {
 
   choose(row, cx) {
     if (this.owner.busy || !this.rows.includes(row)) return;
+    this.selectRoot(row.root, cx);
+  }
+
+  selectRoot(root, cx) {
+    if (this.owner.busy) return;
     const workspace = this.workspace();
     if (JSON.stringify(workspace) !== this.context) return;
     this.open = false;
-    setShared(`git.repository.${workspace.id}`, { workspace: workspace.folder, on: workspace.on, root: row.root });
+    setShared(`git.repository.${workspace.id}`, { workspace: workspace.folder, on: workspace.on, root });
     this.owner.refresh(cx); cx.notify();
   }
 

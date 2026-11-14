@@ -1,6 +1,6 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button, Popover, InputState, Input, ScrollHandle } from "gpui-base";
-import { exec, shared, setShared } from "herdr";
+import { exec, shared, setShared, openOverlay } from "herdr";
 import { shortAge } from "./graph.js";
 import { showGitError } from "./gitError.js";
 
@@ -11,6 +11,13 @@ export function branchRows(text) {
     const [ref, author, timestamp, subject, worktree] = line.split("\0");
     return { name: ref.slice(11), author, timestamp: Number(timestamp), subject, worktree };
   });
+}
+export function worktreeRows(text) {
+  return text.split('\0\0').filter(Boolean).map((block, index) => {
+    const fields = block.split('\0'), root = fields.find(field => field.startsWith('worktree '))?.slice(9);
+    if (!root || fields.includes('bare') || fields.some(field => field.startsWith('prunable'))) return null;
+    return { root, main: index === 0, name: index === 0 ? 'main' : root.split(/[\\/]/).filter(Boolean).pop(), branch: fields.find(field => field.startsWith('branch '))?.slice(7).replace(/^refs\/heads\//, '') || 'Detached HEAD' };
+  }).filter(Boolean);
 }
 const ACTIONS = [
   ["fetch", "Fetch", ["fetch", "--all"], "fetch"],
@@ -26,14 +33,17 @@ export class GitToolbar {
   constructor(owner, key, cx) {
     this.owner = owner; this.key = key; this.focus = cx.focus_handle();
     this.scroll = ScrollHandle.new();
-    this.search = InputState.new({ placeholder: "Filter or create a branch…" });
+    this.search = InputState.new({ placeholder: "Filter…" });
     this.search.on("change", (_e, cx) => { this.at = 0; this.scroll.scroll_to_item(0); this.validateBranch(cx); });
-    this.search.on("submit", (_e, cx) => { const branch = this.choices()[this.at]; if (branch) branch.create ? this.createBranch(branch.name, cx) : this.switchBranch(branch, cx); });
+    this.search.on("submit", (_e, cx) => {
+      if (this.open === "worktrees") { this.switchWorktree(this.worktreeChoices()[this.at], cx); return; }
+      const branch = this.choices()[this.at]; if (branch) branch.create ? this.createBranch(branch.name, cx) : this.switchBranch(branch, cx);
+    });
     this.reset();
   }
 
   reset() {
-    this.open = null; this.mode = "actions"; this.branches = []; this.remotes = [];
+    this.open = null; this.mode = "actions"; this.branches = []; this.worktrees = []; this.remotes = [];
     this.error = null; this.loading = false; this.at = 0; this.lease = null;
     this.creation = null; this.createVersion = (this.createVersion ?? 0) + 1;
     this.search.set_value(""); this.sequence = (this.sequence ?? 0) + 1;
@@ -84,6 +94,7 @@ export class GitToolbar {
     if (!open || !this.enabled()) { cx.notify(); return; }
     this.open = kind; this.menuContext = this.snapshot();
     if (kind === "branches") this.loadBranches(cx);
+    if (kind === "worktrees") this.loadWorktrees(cx);
     cx.notify();
   }
 
@@ -107,6 +118,37 @@ export class GitToolbar {
   switchBranch(branch, cx) {
     if (branch.name === this.owner.branch || (branch.worktree && branch.worktree !== this.owner.root)) return;
     this.run(`Switch to ${branch.name}`, ["switch", "--no-guess", "--", branch.name], cx);
+  }
+
+  worktreeChoices() { const filter = this.search.value().trim().toLowerCase(); return this.worktrees.filter(row => `${row.name} ${row.root} ${row.branch}`.toLowerCase().includes(filter)); }
+
+  loadWorktrees(cx) {
+    const s = this.menuContext, sequence = this.sequence;
+    this.loading = true;
+    cx.spawn(async cx => {
+      try {
+        const result = await exec("git", [...READ, "worktree", "list", "--porcelain", "-z"], { cwd: s.root, on: s.on });
+        if (!this.current(s) || sequence !== this.sequence) return;
+        if (result.code !== 0) throw new Error(result.stderr || "Cannot load worktrees");
+        this.worktrees = worktreeRows(result.stdout);
+        this.at = Math.max(0, this.worktreeChoices().findIndex(row => row.root === s.root));
+        this.scroll.scroll_to_item(this.at); this.search.focus();
+      } catch (e) { if (this.current(s) && sequence === this.sequence) this.error = e.message; }
+      finally { if (sequence === this.sequence) this.loading = false; cx.notify(); }
+    });
+  }
+
+  switchWorktree(row, cx) {
+    if (!row || !this.worktrees.includes(row) || !this.current(this.menuContext) || !this.enabled()) return;
+    this.open = null; this.owner.repositories.selectRoot(row.root, cx);
+  }
+
+  newWorktree(cx) {
+    if (!this.current(this.menuContext) || !this.enabled()) return;
+    const workspace = this.owner.repositories.workspace();
+    this.open = null;
+    openOverlay({ mod: "worktree", props: { space: workspace.id, folder: this.owner.root, action: "new" }, kind: "dialog", width: 460, height: 280 });
+    cx.notify();
   }
 
   action(id, cx) {
@@ -177,13 +219,14 @@ export class GitToolbar {
   }
 
   menu(kind, trigger, body, width, cx) {
-    return Popover.new(`git-${kind}`).open(this.open === kind).anchor(kind === "repository" ? "top_right" : kind === "branches" ? "bottom_left" : "bottom_right")
+    return Popover.new(`git-${kind}`).open(this.open === kind).anchor(kind === "repository" ? "top_right" : ["branches", "worktrees"].includes(kind) ? "bottom_left" : "bottom_right")
       .track_focus(this.focus).on_open_change((open, cx) => this.show(kind, open, cx)).trigger(trigger)
       .when(this.open === kind, el => el.content(v_flex().w(width).max_h(380).p(5).gap(2).bg(this.colors.popover).border_1().border_color(this.colors.border).rounded(8).shadow_md()
         .track_focus(this.focus).on_key_down((e, cx) => {
           if (e.key === "escape") { this.open = null; cx.stop_propagation(); cx.notify(); }
-          if (kind === "branches" && ["up", "down"].includes(e.key)) {
-            this.at = Math.max(0, Math.min(this.choices().length - 1, this.at + (e.key === "down" ? 1 : -1)));
+          if (["branches", "worktrees"].includes(kind) && ["up", "down"].includes(e.key)) {
+            const choices = kind === "worktrees" ? this.worktreeChoices() : this.choices();
+            this.at = Math.max(0, Math.min(choices.length - 1, this.at + (e.key === "down" ? 1 : -1)));
             this.scroll.scroll_to_item(this.at);
             cx.stop_propagation(); cx.notify();
           }
@@ -220,6 +263,23 @@ export class GitToolbar {
             .child(div().truncate().text_size(10.5).text_color(t.muted).child(`${b.author} · ${shortAge(b.timestamp)} · ${b.subject}`)));
       })))
       .when(!branches.length, el => el.child(div().p(8).text_size(11).text_color(t.muted).child(this.loading ? "Loading branches…" : this.error || (this.creation?.pending ? "Checking branch name…" : this.creation?.error || "No matching local branches"))));
+  }
+
+  worktreeBody() {
+    const t = this.colors, rows = this.worktreeChoices();
+    return v_flex().min_h(0).gap(4)
+      .child(div().px(8).py(4).text_size(11).text_color(t.muted).child("Worktrees"))
+      .child(div().h(28).px(8).border_b(1).border_color(t.border).child(Input.new(this.search).h_full().text_size(12).accessibility_label("Filter worktrees")))
+      .child(v_flex().id("git-worktree-list").h(Math.min(276, rows.length * 46)).min_h(0).overflow_y_scrollbar().track_scroll(this.scroll)
+        .children(rows.map((row, i) => Button.new(`git-worktree-${row.root}`).h_flex().w_full().h(46).flex_none().px(8).gap(8).items_center().rounded(4).font_normal()
+          .disabled(this.loading || this.owner.busy).accessibility_label(`Select worktree ${row.name}`).tooltip(row.root).bg(i === this.at ? t.selected : t.popover).hover(el => el.bg(t.hover))
+          .on_click((_e, cx) => this.switchWorktree(row, cx))
+          .child(svg(row.root === this.owner.root ? "mods/workspace-chrome/check.svg" : "mods/changes-graph/worktree.svg").size(13).flex_none().text_color(t.muted))
+          .child(v_flex().flex_1().min_w(0).gap(2).child(div().truncate().text_size(12).text_color(t.foreground).child(row.name))
+            .child(div().truncate().text_size(10.5).text_color(t.muted).child(`${row.branch} · ${row.root}`))))))
+      .when(!rows.length, el => el.child(div().p(8).text_size(11).text_color(t.muted).child(this.loading ? "Loading worktrees…" : this.error || "No matching worktrees")))
+      .child(div().h(1).bg(t.border))
+      .child(this.option("git-new-worktree", "New worktree…", cx => this.newWorktree(cx), this.loading, "worktree"));
   }
 
   actionBody() {
@@ -279,7 +339,13 @@ export class GitToolbar {
       : sync?.ahead > 0 ? { label: `Push (${sync.ahead})`, args: ["push"], icon: "upload" }
       : { label: "Fetch", args: ["fetch", "--all"], icon: "fetch" };
     const description = sync ? `${sync.ahead} outgoing · ${sync.behind} incoming · ${sync.upstream}` : "Fetch all remotes";
-    const trigger = Button.new("git-current-branch").h_flex().h(28).min_w(0).max_w(220).flex_none().px(6).gap(6).items_center().justify_start().rounded(6)
+    const worktree = p.mainWorktree === p.root && p.root ? "main" : p.root?.split(/[\\/]/).filter(Boolean).pop() || "Worktree";
+    const worktreeTrigger = Button.new("git-current-worktree").h_flex().h(28).min_w(0).max_w(150).flex_shrink(1).px(6).gap(6).items_center().justify_start().rounded(6)
+      .bg(this.open === "worktrees" ? t.hover : "#00000000").border_1().border_color("#00000000").font_normal().text_size(12).text_color(hasRepository ? t.muted : t.dim)
+      .disabled(!enabled).accessibility_label(`Select worktree, current: ${worktree}`).tooltip(p.root || "Select worktree").hover(el => el.bg(t.hover).text_color(t.foreground)).focus(el => el.border_color(t.accent))
+      .child(svg("mods/changes-graph/worktree.svg").size(13).flex_none()).child(div().min_w(0).truncate().child(worktree))
+      .child(svg("mods/changes-graph/chevron.svg").size(11).flex_none().text_color(t.dim));
+    const trigger = Button.new("git-current-branch").h_flex().h(28).min_w(0).max_w(160).flex_shrink(1).px(6).gap(6).items_center().justify_start().rounded(6)
       .bg(this.open === "branches" ? t.hover : "#00000000").border_1().border_color("#00000000").font_normal().text_size(12).text_color(hasRepository ? t.muted : t.dim)
       .disabled(!enabled).accessibility_label(`Switch branch, current: ${branch}`).hover(s => s.bg(t.hover).text_color(t.foreground)).focus(s => s.border_color(t.accent))
       .child(svg("mods/changes-graph/branch.svg").size(13).flex_none()).child(div().min_w(0).truncate().child(branch))
@@ -288,6 +354,8 @@ export class GitToolbar {
       .text_color(t.dim).accessibility_label("Git actions").hover(s => s.bg(t.hover).text_color(t.foreground)).focus(s => s.border_color(t.accent))
       .child(svg("mods/changes-graph/chevron.svg").size(11).flex_none());
     return h_flex().h(38).flex_none().px(10).gap(8).items_center()
+      .child(this.menu("worktrees", worktreeTrigger, this.worktreeBody(), 380, cx))
+      .child(div().text_size(12).text_color(t.dim).child("/"))
       .child(this.menu("branches", trigger, this.branchBody(), 320, cx))
       .child(div().flex_1().min_w(0))
       .child(h_flex().flex_none().h(28).items_center()

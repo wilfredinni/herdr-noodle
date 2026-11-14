@@ -152,6 +152,17 @@ class ReviewTaskTests(WorkspaceFixture):
         result = self.call('review_compare', ref='base')
         self.assertEqual(result['files'], [{'status': 'A', 'path': 'second.txt'}])
         self.assertEqual(self.git('status', '--porcelain'), '')
+    def test_review_lists_local_and_remote_branches_without_symbolic_aliases(self):
+        self.setup_git(); self.git('branch', 'topic')
+        self.git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        self.git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
+        before = self.git('rev-parse', 'HEAD')
+        branches = self.call('review_branches')['branches']
+        self.assertIn({'name': 'topic', 'ref': 'refs/heads/topic'}, branches)
+        self.assertIn({'name': 'origin/main', 'ref': 'refs/remotes/origin/main'}, branches)
+        self.assertFalse(any(branch['ref'] == 'refs/remotes/origin/HEAD' for branch in branches))
+        self.assertEqual(self.git('rev-parse', 'HEAD'), before)
+        self.assertEqual(self.git('status', '--porcelain'), '')
     def test_task_saved_config_dirty_guard_and_ownership(self):
         self.file(); doc = self.call('document_open', path='one.txt'); Path(doc['inputPath']).write_text('draft'); self.call('document_checkpoint', id=doc['id'])
         self.call('task_save', name='test', command='printf fixture')

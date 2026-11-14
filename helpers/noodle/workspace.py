@@ -22,6 +22,7 @@ def dispatch(action, request):
         if action == 'review_hunks': return review.hunks(request, home)
         if action == 'review_apply': return review.apply(request, home)
         if action == 'review_compare': return review.compare(request)
+        if action == 'review_branches': return review.branches(request)
         if action == 'review_pr': return review.pr(request, home)
         if action == 'review_log': return review.failure_log(request, home)
         if action.startswith('task'):

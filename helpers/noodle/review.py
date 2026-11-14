@@ -70,6 +70,13 @@ def apply(request, home):
     return {'changed': True}
 
 
+def branches(request):
+    root, _ = resolve({**request, 'path': ''}, allow_root=True)
+    raw = git(root, 'for-each-ref', '--sort=refname', '--format=%(refname:short)%00%(refname)%00%(symref)', 'refs/heads/', 'refs/remotes/').decode()
+    rows = [line.split('\0') for line in raw.splitlines()]
+    return {'branches': [{'name': name, 'ref': ref} for name, ref, symbolic in rows if not symbolic]}
+
+
 def compare(request):
     root, _ = resolve({**request, 'path': ''}, allow_root=True)
     ref = request.get('ref') or '@{upstream}'
