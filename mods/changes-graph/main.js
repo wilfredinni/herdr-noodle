@@ -481,7 +481,6 @@ export default class Changes extends View {
             .bg(this.open === file.path && this.openMode === mode ? t.selected : "#00000000").hover(el => el.bg(t.hover))
             .on_click((_e, cx) => this.openFile(file, null, cx, { diffMode: mode }))
             .child(div().w(12).flex_none().text_size(11).text_color(status === "A" ? t.ansi2 : status === "D" || status === "U" ? t.ansi1 : t.ansi3).child(status))
-            .child(svg("mods/changes-graph/file.svg").size(13).flex_none().text_color(t.muted))
             .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(status === "D" ? t.muted : t.foreground).when(status === "D", el => el.line_through()).tooltip(file.path).child(name))
             .child(div().max_w("45%").min_w(0).truncate().text_size(11).text_color(t.muted).tooltip(parts.join("/")).child(parts.join("/")))
             .child(this.fileActions.rowMenu(file, mode, t, cx, disabled))

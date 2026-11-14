@@ -3,6 +3,7 @@ import { v_flex, h_flex, Button, Scrollbar, v_virtual_list, TextView, Popover, V
 import { shared, exec, readTextFile, watchFolder, theme, settings, props, focused, panes, setShared, run, appHome } from "herdr";
 import { Review } from "./review.js";
 import { readDiff, readFile, readMarkdown, isMarkdown, splitRows, git } from "./content.js";
+import { fileIcon } from "./fileIcons.js";
 
 export default class FilePreview extends View {
   init(_props, cx) {
@@ -344,6 +345,7 @@ export default class FilePreview extends View {
       this.pending = null; this.actionError = completed.error; this.refresh(cx, true);
     }
     const t = theme(), s = this.selection, file = s?.file;
+    const icon = fileIcon(file?.path.split(/[\\/]/).pop() || "");
     const sourceMode = this.mode === "source", source = s?.kind === "file" ? this.result : this.source;
     const rows = sourceMode ? source?.rows || [] : this.rows, split = !sourceMode && this.layout === "split";
     const error = sourceMode ? this.sourceError || (s?.kind === "file" ? this.error : null) : this.error;
@@ -357,7 +359,7 @@ export default class FilePreview extends View {
     return v_flex().id("file-preview").size_full().min_w(0).min_h(0).bg(t.canvas).text_color(t.foreground).text_size(12)
       .child(h_flex().h(58).flex_none().px(14).gap(10).items_center().border_b(1).border_color(t.border).bg(t.background)
         .child(this.iconButton("close-preview", "Close preview", "mods/pane/close.svg", () => this.closePreview(), t))
-        .child(svg("mods/changes-graph/file.svg").size(16).flex_none().text_color(t.muted))
+        .child(svg(icon.path).id("preview-file-icon").size(16).flex_none().text_color(t[icon.color]))
         .child(v_flex().flex_1().min_w(0).gap(3)
           .child(div().truncate().font_semibold().tooltip(file?.path || "").child(file?.path || (s?.commit ? "Commit details" : "File preview")))
           .child(div().truncate().text_size(11).text_color(t.muted).child(`${name}  ›  ${scope}`)))

@@ -33,7 +33,6 @@ export class CommitInstructions {
         .child(Button.new("close-commit-instructions").size(26).flex_none().flex().items_center().justify_center().rounded(5).bg("#00000000").text_color(t.muted)
           .accessibility_label("Close commit instructions").tooltip("Close").hover(el => el.bg(t.hover).text_color(t.foreground)).focus(el => el.bg(t.hover))
           .on_click(() => closeOverlay(this.options.overlay)).child(svg("mods/pane/close.svg").size(13))))
-      .child(div().truncate().tooltip(this.options.root).text_size(12).text_color(t.muted).child(`Commit subject style for ${this.options.root.split(/[\\/]/).filter(Boolean).pop()}.`))
       .child(Textarea.new(this.input).flex_1().min_h(100).w_full().p(10).rounded(5).border_1().border_color(t.input).bg(t.background).text_size(13).line_height("20px")
         .accessibility_label("Commit generation instructions"))
       .when(Boolean(this.error), el => el.child(div().text_size(12).text_color(t.ansi1).child(this.error)))

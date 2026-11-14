@@ -12,10 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BundleTests(unittest.TestCase):
-    def test_editor_and_browser_keep_the_same_icon_mapping(self):
+    def test_file_views_keep_the_same_icon_mapping(self):
         # Herdr isolates module imports to each mod's directory.
-        self.assertEqual((ROOT/'mods/file-editor/fileIcons.js').read_bytes(),
-                         (ROOT/'mods/files-browser/fileIcons.js').read_bytes())
+        for mod in ['file-editor', 'git-file-preview']:
+            self.assertEqual((ROOT/'mods'/mod/'fileIcons.js').read_bytes(),
+                             (ROOT/'mods/files-browser/fileIcons.js').read_bytes())
 
     def test_bundle_has_the_declared_mods_and_documentation(self):
         manifest = json.loads((ROOT/'manifest.json').read_text())

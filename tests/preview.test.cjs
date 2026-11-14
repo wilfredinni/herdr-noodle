@@ -30,7 +30,7 @@ function harness(selection) {
     exec: async (command, args, options) => { calls.push([command, args]); try { return { code: 0, stdout: execFileSync(command, args, { cwd: options.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) }; } catch (e) { return { code: e.status, stderr: e.stderr.toString() }; } },
     readTextFile: async file => fs.promises.readFile(file, 'utf8'),
   };
-  const c = vm.createContext({ View: class {}, div: element, svg: () => element(), v_flex: element, h_flex: element,
+  const c = vm.createContext({ View: class {}, div: element, svg: source => { const icon = element(); icon.attrs.src = [source]; return icon; }, v_flex: element, h_flex: element,
     Button: { new: element }, Popover: { new: element }, Scrollbar: { vertical: element }, TextView: { markdown: element }, v_virtual_list: element,
     Input: { new: element }, InputState: { new: () => { let value = ''; return { on() {}, set_value(next) { value = next; }, value: () => value }; } },
     ScrollHandle: { new: () => ({ scroll_to_item() {} }) }, VirtualListScrollHandle: { new: () => ({}) }, appHome: () => '/fixture-app',
@@ -40,6 +40,7 @@ function harness(selection) {
   });
   load(c, 'gutter.js', ['lineChanges']); load(c, 'content.js', ['isMarkdown', 'splitRows', 'diffRows', 'readFile', 'readDiff', 'readSource', 'readMarkdown', 'git']);
   load(c, 'review.js', ['Review']);
+  load(c, 'fileIcons.js', ['fileIcon']);
   load(c, 'main.js', ['FilePreview']);
   const view = new c.FilePreview(); view.watch = () => {}; view.init({}, cx);
   return { c, view, state, cx, host, calls, async flush() { while (jobs.length) await Promise.all(jobs.splice(0)); } };
@@ -50,6 +51,23 @@ function fixture(t) {
   fs.writeFileSync(path.join(root, 'a.md'), 'before\n'); fs.writeFileSync(path.join(root, 'b.txt'), 'second\n'); git(root, 'add', '.'); git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Baseline');
   return root;
 }
+
+test('preview header matches file-type icons for nested paths and unknown extensions', () => {
+  const h = harness(null);
+  for (const [file, icon, color] of [
+    ['docs/README.md', 'mods/files-browser/icons/markdown.svg', 'ansi4'],
+    ['web/package.json', 'icons/npm.svg', 'ansi1'],
+    ['src/script.py', 'icons/python.svg', 'ansi3'],
+    ['data.unknown', 'mods/files-browser/file.svg', 'muted'],
+  ]) {
+    const selection = { root: '/repo', file: { path: file }, on: null };
+    h.state.set('selection', selection); h.view.selection = selection; h.view.root = selection.root;
+    h.view.context = JSON.stringify(selection);
+    const rendered = find(h.view.render(h.cx), 'preview-file-icon');
+    assert.equal(rendered.attrs.src[0], icon);
+    assert.equal(rendered.attrs.text_color[0], color);
+  }
+});
 
 test('unified line numbers and split pairs preserve hunk positions and unequal replacements', () => {
   const h = harness(null), rows = h.c.diffRows(['@@ -8,3 +20,4 @@', ' keep', '-old1', '-old2', '+new1', '+new2', '+new3', '@@ -30 +40 @@', ' tail']);
