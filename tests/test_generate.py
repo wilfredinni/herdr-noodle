@@ -42,19 +42,36 @@ class GenerateTests(unittest.TestCase):
   before=(self.root/'.git/index').read_bytes();snapshot=self.snap()
   self.assertGreater(len(snapshot['payload'].encode()),60000)
   self.assertIn('a'*39999+'b',snapshot['payload']);self.assertEqual(snapshot['paths'],['a.txt'])
-  with patch.object(g,'catalog',return_value={'connections':[{'id':'opencode:go','models':[{'id':'test'}]}]}),patch.object(g,'command',return_value='{"data":{"text":"Update the long-line fixture"}}') as command:
+  with patch.object(g,'catalog',return_value={'connections':[{'id':'opencode:go','models':[{'id':'test'}]}]}),patch.object(g,'opencode_request',return_value='{"data":{"text":"Update the long-line fixture"}}') as command:
    self.assertEqual(g.generate(self.request)['subject'],'Update the long-line fixture')
    command.assert_called_once()
   self.assertEqual(before,(self.root/'.git/index').read_bytes())
  def test_oversize_diff_reports_actual_size_and_limit(self):
   (self.root/'a.txt').write_text('a'*(g.LIMIT+1))
-  with self.assertRaisesRegex(ValueError,r'too large \([\d,]+ bytes; limit 120,000\)'):self.snap()
+  with self.assertRaisesRegex(ValueError,r'too large \([\d,]+ bytes; limit 1,200,000\)'):self.snap()
  def test_encoded_opencode_body_is_checked_before_provider_request(self):
-  (self.root/'new.txt').write_text('"'*61000)
+  (self.root/'new.txt').write_text('"'*610000)
   self.assertLess(len(self.snap()['payload'].encode()),g.LIMIT)
-  with patch.object(g,'catalog',return_value={'connections':[{'id':'opencode:go','models':[{'id':'test'}]}]}),patch.object(g,'command') as command:
+  with patch.object(g,'catalog',return_value={'connections':[{'id':'opencode:go','models':[{'id':'test'}]}]}),patch.object(g,'opencode_request') as command:
    with self.assertRaisesRegex(ValueError,'encoded OpenCode request is too large'):g.generate(self.request)
    command.assert_not_called()
+ def test_large_diff_below_new_limit_is_not_truncated(self):
+  self.assertEqual(g.LIMIT,1_200_000);self.assertEqual(g.OPENCODE_BODY_LIMIT,1_200_000)
+  content='x'*1_100_000+'END_OF_LARGE_FILE'
+  (self.root/'new.txt').write_text(content)
+  snapshot=self.snap();self.assertGreater(len(snapshot['payload'].encode()),1_048_576);self.assertIn(content,snapshot['payload'])
+  with patch.object(g,'catalog',return_value={'connections':[{'id':'opencode:go','models':[{'id':'test'}]}]}),patch.object(g,'opencode_request',return_value='{"data":{"text":"Update large fixture"}}') as request:
+   self.assertEqual(g.generate(self.request)['subject'],'Update large fixture')
+   body=json.loads(request.call_args.args[0]);self.assertIn(content,body['prompt']);self.assertLess(len(request.call_args.args[0].encode()),g.OPENCODE_BODY_LIMIT)
+ def test_codex_large_prompt_uses_stdin_not_arguments(self):
+  content='y'*1_100_000+'CODEX_END'
+  (self.root/'new.txt').write_text(content);self.request['connection']='codex'
+  def codex(args,cwd,data=None,timeout=None):
+   self.assertIn(content,data);self.assertNotIn(content,' '.join(args));self.assertEqual(args[-1],'-')
+   pathlib.Path(args[args.index('--output-last-message')+1]).write_text('{"subject":"Update large fixture"}')
+   return ''
+  with patch.object(g,'catalog',return_value={'connections':[{'id':'codex','models':[{'id':'test'}]}]}),patch.object(g,'command',side_effect=codex):
+   self.assertEqual(g.generate(self.request)['subject'],'Update large fixture')
  def test_ignored_not_sent(self):
   (self.root/'.gitignore').write_text('secret\n');(self.root/'secret').write_text('hidden credential');self.assertNotIn('hidden credential',self.snap()['payload'])
  def test_unborn_repo(self):
@@ -67,7 +84,7 @@ class GenerateTests(unittest.TestCase):
  def test_changes_during_generation(self):
   def provider(*args,**kwargs):
    (self.root/'a.txt').write_text('changed during request\n');return '{"data":{"text":"Update files"}}'
-  with patch.object(g,'catalog',return_value={'connections':[{'id':'opencode:go','models':[{'id':'test'}]}]}),patch.object(g,'command',side_effect=provider):
+  with patch.object(g,'catalog',return_value={'connections':[{'id':'opencode:go','models':[{'id':'test'}]}]}),patch.object(g,'opencode_request',side_effect=provider):
    with self.assertRaisesRegex(ValueError,'changed during generation'):g.generate(self.request)
  def test_model_disappeared_no_request(self):
   with patch.object(g,'catalog',return_value={'connections':[]}),patch.object(g,'command') as command:

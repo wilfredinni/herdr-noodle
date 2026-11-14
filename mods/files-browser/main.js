@@ -1,8 +1,10 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
-import { spaces, panes, focused, exec, watchFolder, theme, window, run, shared, setShared } from "herdr";
+import { v_flex, h_flex, Button } from "gpui-base";
+import { spaces, panes, focused, exec, watchFolder, theme, window, run, shared, setShared, nextCommand, props, openOverlay } from "herdr";
 
+import { Tasks } from "./tasks.js";
+import { FileTools } from "./tools.js";
 import { gitState, fileState } from "./gitState.js";
 import { fileIcon } from "./fileIcons.js";
 import { readFile } from "fs/promises";
@@ -13,7 +15,9 @@ function location() {
   const selection = active?.mod === "git-file-preview" ? shared(`git-file-preview.${f.tab}`) : null;
   const pane = selection ? all.find(p => p.pane === selection.sourcePane) : active;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
-  return { cwd: pane?.cwd || selection?.root || f?.cwd || space?.folder, on, space: space?.id };
+  const workspace = pane?.cwd || selection?.root || f?.cwd || space?.folder;
+  const repo = shared(`git.repository.${space?.id}`), scope = shared(`noodle.files.scope.${space?.id}`);
+  return { cwd: scope !== "workspace" && repo && repo.workspace === workspace && repo.on === on ? repo.root : workspace, workspace, on, space: space?.id };
 }
 const key = () => JSON.stringify(location());
 const PER_FOLDER = 500, TOTAL = 5000;
@@ -46,7 +50,21 @@ async function directory(path, on) {
 export default class Files extends View {
   init(_props, cx) {
     this.saved = new Map();
+    if (typeof FileTools !== "undefined") { this.tools = new FileTools(this, cx); this.tasks = new Tasks(this); }
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.git = gitState(null);
+    const options = typeof props === "function" ? props() : _props;
+    this.palette = Boolean(options?.palette);
+    if (this.palette) {
+      this.root = options.root; this.on = options.on; this.context = { key: key() }; this.git = gitState(options.gitRoot || null);
+      this.tools.show(options.mode || "files", cx); return;
+    }
+    if (typeof nextCommand !== "undefined") cx.spawn(async cx => { for (;;) {
+      const command = await nextCommand();
+      if (command === "quick-open" || command === "search") {
+        this.refresh(cx);
+        if (this.root && !this.on) openOverlay({ mod: "files-browser", props: { palette: true, mode: command === "search" ? "content" : "files", root: this.root, on: this.on, gitRoot: this.git.root }, kind: "dialog", frame: "none", width: 680, height: 460 });
+      }
+    } });
     this.refresh(cx);
     cx.timer.every(10000, cx => this.refresh(cx));
   }
@@ -101,6 +119,7 @@ export default class Files extends View {
   refresh(cx) {
     const { cwd, on } = location(), next = key();
     if (next !== this.context?.key) {
+      if (this.tools) { this.tools.sequence = (this.tools.sequence || 0) + 1; this.tools.mode = null; this.tools.contextPoint = null; this.tools.contextOpen = null; this.tools.results = []; this.tools.prepared = null; this.tasks.data = null; }
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
@@ -165,7 +184,7 @@ export default class Files extends View {
     cx.notify();
   }
 
-  show(path, cx) {
+  show(path, cx, options = {}) {
     if (!path || !cx || !this.current(this.context)) return;
     const focus = focused();
     if (!focus) return;
@@ -175,7 +194,7 @@ export default class Files extends View {
     this.file = path;
     const selectionKey = `git-file-preview.${focus.tab}`;
     const status = fileState(this.git, `${this.root}/${path}`);
-    setShared(selectionKey, { kind: "file", root: this.root, on: this.on, gitRoot: status === "outside" || status === "ignored" ? null : this.git.root, file: { path, status: ["A", "M", "U", "D"].includes(status) ? status : "" }, hash: null, parent: null, hasHead: false, sourcePane: source.pane });
+    setShared(selectionKey, { kind: "file", navigation: options, root: this.root, on: this.on, gitRoot: status === "outside" || status === "ignored" ? null : this.git.root, file: { path, status: ["A", "M", "U", "D"].includes(status) ? status : "" }, hash: null, parent: null, hasHead: false, sourcePane: source.pane });
     if (existing) run("pane.focus", { pane: existing.pane });
     else run("pane.split", { pane: source.pane, direction: "right", mod: "git-file-preview", props: { selectionKey } });
     cx.notify();
@@ -189,28 +208,34 @@ export default class Files extends View {
       const muted = mark === "ignored" || mark === "outside";
       const color = mark === "M" ? t.ansi3 : mark === "A" ? t.ansi2 : mark === "U" || mark === "D" ? t.ansi1 : muted ? t.muted : t.foreground;
       const iconColor = muted ? t.dim : ["A", "M", "U", "D"].includes(mark) ? color : t[icon.color];
-      out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().when(this.file === path, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
+      const row = h_flex().id(`file-${path}`).w_full().h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().when(this.file === path, el => el.bg(t.selected)).hover(s => s.bg(t.hover))
         .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.show(path, cx))
         .child(entry.dir ? svg(`mods/files-browser/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(div().w(18).h(18).flex_none().relative()
           .child(svg(icon.path).size(16).text_color(iconColor))
           .when(Boolean(icon.badge), el => el.child(svg(icon.badge).size(9).absolute().right(0).bottom(0).bg(t.background).text_color(iconColor))))
         .child(div().flex_1().min_w(0).truncate().text_color(color).child(entry.name))
-        .when(["A", "M", "U", "D"].includes(mark), el => el.child(div().text_size(11).text_color(color).child(mark))));
+        .when(["A", "M", "U", "D"].includes(mark), el => el.child(div().text_size(11).text_color(color).child(mark)));
+      out.push(this.tools ? this.tools.context(row, path, entry.dir, t) : row);
       if (entry.dir && open) this.rows(path, depth + 1, out, t);
     }
     return out;
   }
 
   render(cx) {
-    if (key() !== this.context?.key) this.refresh(cx);
     const t = theme();
-    return v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+    if (this.palette) return this.tools.palette(t, cx);
+    if (key() !== this.context?.key) this.refresh(cx);
+    const panel = v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(div().font_semibold().child("Files"))
-        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.root?.split(/[\\/]/).pop() ?? "")))
-      .child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
+        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.root?.split(/[\\/]/).pop() ?? ""))
+        .when(Boolean(this.tools), el => el.child(Button.new("files-scope").h(28).px(8).rounded(5).text_size(12).child(shared(`noodle.files.scope.${location().space}`) === "workspace" ? "Workspace" : "Repository").on_click((_e, cx) => { const key = `noodle.files.scope.${location().space}`; setShared(key, shared(key) === "workspace" ? "repository" : "workspace"); this.refresh(cx); if (["files", "content"].includes(this.tools.mode)) this.tools.search(cx); }))))
+      .when(this.tools?.mode === "tasks", el => el.child(this.tasks.render(t, cx)))
+      .when(!this.tools || this.tools.mode !== "tasks", el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
+        .when(Boolean(this.tools), el => el.child(this.tools.context(div().id("files-empty-space").flex_1().min_h(1).w_full().bg(t.background), "", true)))
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
-        .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total"))));
+        .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))));
+    return this.tools ? this.tools.contextArea(panel, t, cx) : panel;
   }
 }

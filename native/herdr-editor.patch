@@ -1,0 +1,58 @@
+--- a/vendor/gpui-kit/crates/shell/src/engine/quickjs/mod.rs
++++ b/vendor/gpui-kit/crates/shell/src/engine/quickjs/mod.rs
+@@ -7157,6 +7157,7 @@
+         const handle = __editor_state_new(JSON.stringify(options));
+         return {
+           __handle: handle,
++          open_search: (replace = false) => __editor_text_call(handle, "open_search", [!!replace]),
+           selected_range: () => __editor_text_call(handle, "selected_range", []),
+           set_selected_range: (range) => __editor_text_call(handle, "set_selected_range", [range]),
+           replace: (text) => __editor_text_call(handle, "replace", [String(text)]),
+--- a/vendor/gpui-kit/crates/shell/src/entities.rs
++++ b/vendor/gpui-kit/crates/shell/src/entities.rs
+@@ -472,7 +472,8 @@
+                 .language(options.language)
+                 .line_number(options.line_numbers)
+                 .folding(options.folding)
+-                .soft_wrap(options.soft_wrap);
++                .soft_wrap(options.soft_wrap)
++                .searchable(true);
+             state.set_readonly(options.readonly, cx);
+             state.set_editor_style(style);
+             state.set_highlighter_factory(
+--- a/vendor/gpui-kit/crates/shell/src/input_tokens.rs
++++ b/vendor/gpui-kit/crates/shell/src/input_tokens.rs
+@@ -309,6 +309,7 @@
+ /// HERDR: the selection operations of a source editor, so scripts can format
+ /// the selection. Editors have no inline tokens.
+ pub(crate) const EDITOR_METHODS: &[(&str, bool)] = &[
++    ("open_search", false),
+     ("selected_range", true),
+     ("set_selected_range", false),
+     ("replace", false),
+@@ -333,6 +334,10 @@
+         ("replace", [text]) => {
+             let text = string(text)?;
+             entity.update(cx, |state, cx| state.replace(text, window, cx));
++            Ok(Data::Null)
++        }
++        ("open_search", [Data::Boolean(replace)]) => {
++            entity.update(cx, |state, cx| state.open_search(*replace, cx));
+             Ok(Data::Null)
+         }
+         _ => bail!("invalid arguments for editor state operation `{name}`"),
+--- a/vendor/gpui-kit/crates/shell/src/typings.rs
++++ b/vendor/gpui-kit/crates/shell/src/typings.rs
+@@ -3201,6 +3201,12 @@
+ 
+   // HERDR: built-in source editing and read-only code viewing.
+   export interface EditorState {
++    /** Open native find or find/replace, retaining cursor and undo history. */
++    open_search(replace?: boolean): void;
++    selected_range(): InputRange;
++    set_selected_range(range: InputRange): void;
++    replace(text: string): void;
++    focus(): void;
+     value(): string;
+     /** Programmatic replacement works even in readonly mode. */
+     set_value(value: string): void;

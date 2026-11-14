@@ -1,12 +1,15 @@
-import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, Button, Scrollbar, v_virtual_list, TextView, Popover } from "gpui-base";
+import { View, div, svg, image } from "gpui-kit";
+import { v_flex, h_flex, Button, Scrollbar, v_virtual_list, TextView, Popover, VirtualListScrollHandle } from "gpui-base";
 import { shared, exec, readTextFile, watchFolder, theme, settings, props, focused, panes, setShared, run, appHome } from "herdr";
+import { Review } from "./review.js";
+import { Documents } from "./documents.js";
 import { readDiff, readFile, readMarkdown, isMarkdown, splitRows, git } from "./content.js";
 
 export default class FilePreview extends View {
   init(_props, cx) {
     this.selectionKey = props()?.selectionKey || _props?.selectionKey || "git-file-preview.unselected"; this.rows = []; this.mode = "diff"; this.version = 0;
     this.layout = "unified";
+    if (typeof Documents !== "undefined") { this.documents = new Documents(this, cx); this.review = new Review(this); this.scroll = VirtualListScrollHandle.new(); }
     this.refresh(cx);
     cx.timer.every(10000, cx => {
       if (this.selection && !this.selection.hash) {
@@ -52,8 +55,8 @@ export default class FilePreview extends View {
     if (context !== this.context) {
       const previous = this.selection;
       const sameFile = previous && previous.root === selection.root && previous.on === selection.on && previous.file?.path === selection.file?.path && previous.hash === selection.hash && previous.kind === selection.kind && previous.diffMode === selection.diffMode;
-      if (!sameFile) this.mode = selection.kind === "file" ? "source" : "diff";
-      this.source = null; this.sourceWidth = null; this.sourceError = null; this.sourceLoading = false; this.menuOpen = false; this.menuConfirmation = null; this.conflict = null; this.liveFile = null;
+      if (!sameFile) this.mode = /\.(png|jpe?g|svg)$/i.test(selection.file?.path || "") && !selection.on && !selection.hash ? "asset" : selection.kind === "file" ? "source" : "diff";
+      this.asset = null; this.source = null; this.sourceWidth = null; this.sourceError = null; this.sourceLoading = false; this.menuOpen = false; this.menuConfirmation = null; this.conflict = null; this.liveFile = null;
       this.rows = []; this.result = null; this.markdown = null; this.markdownError = null;
     }
     let changed = Boolean(this.error);
@@ -74,6 +77,7 @@ export default class FilePreview extends View {
           this.liveFile = { ...selection.file, indexStatus: x, staged: ![" ", "?"].includes(x), unstaged: y !== " ", fresh: x === "?", status: entry ? /U/.test(x + y) || ["AA", "DD"].includes(x + y) ? "U" : (y === " " ? x : y) : selection.file.status };
           changed ||= before !== JSON.stringify(this.liveFile);
         }
+        if (/\.(png|jpe?g|svg)$/i.test(selection.file.path) && !selection.on && !selection.hash && this.mode !== "source" && this.mode !== "diff") { await this.loadAsset(cx); changed = true; return; }
         const result = await (selection.kind === "file" ? readFile : readDiff)(selection, { exec, readTextFile }, this.result);
         if (version !== this.version) return;
         if (result === this.result) {
@@ -82,7 +86,9 @@ export default class FilePreview extends View {
           return;
         }
         this.result = result; changed = true;
-        this.rows = result.rows; this.split = splitRows(result.rows); this.truncated = result.truncated; this.syntaxError = result.syntaxError;
+        this.rows = result.rows;
+        if (selection.navigation?.line && this.scroll) this.scroll.scroll_to_item(Math.max(0, this.rows.findIndex(r => r.newNumber === selection.navigation.line || r.number === selection.navigation.line)), "center");
+        this.split = splitRows(result.rows); this.truncated = result.truncated; this.syntaxError = result.syntaxError;
         this.diffWidth = Math.max(300, ...this.rows.map(row => (row.text.length + 1) * 7 + 72));
         this.watch(selection.root, selection.on, cx);
         if (this.mode === "markdown") await this.loadMarkdown(cx);
@@ -123,7 +129,14 @@ export default class FilePreview extends View {
     finally { if (version === this.version) { this.sourceLoading = false; if (changed) cx.notify(); } }
   }
 
-  close() { this.watched = null; }
+  async close() { this.watched = null; await this.documents?.close(); }
+
+  async loadAsset(cx) {
+    const version = this.version;
+    const r = await exec("python3", [`${appHome()}/helpers/noodle/workspace.py`, "asset_preview", JSON.stringify({ home: appHome(), root: this.root, path: this.selection.file.path })]);
+    const result = JSON.parse(r.stdout || "{}"); if (r.code || result.error) throw new Error(result.error || r.stderr);
+    if (version === this.version) { this.asset = result; this.mode = "asset"; cx.notify(); }
+  }
 
   closePreview() {
     const tab = focused()?.tab, pane = panes().find(p => p.tab === tab && p.mod === "git-file-preview");
@@ -150,6 +163,7 @@ export default class FilePreview extends View {
       this.openFile(this.selection.file, null, cx, { kind: "diff" }); return;
     }
     this.mode = mode;
+    if (mode === "asset") cx.spawn(async cx => { try { await this.loadAsset(cx); } catch (e) { this.error = e.message; cx.notify(); } });
     if (mode === "source" && this.selection.kind !== "file" && !this.source && !this.sourceLoading) cx.spawn(cx => this.loadSource(cx));
     if (mode === "markdown" && !this.markdown && !this.markdownLoading) cx.spawn(cx => this.loadMarkdown(cx));
     cx.notify();
@@ -333,17 +347,22 @@ export default class FilePreview extends View {
           .child(div().truncate().text_size(11).text_color(t.muted).child(`${name}  ›  ${scope}`)))
         .when(Boolean(file), el => el
           .child(this.iconButton("preview-copy-path", "Copy file path", "mods/git-file-preview/copy.svg", cx => cx.write_to_clipboard(`${s.root.replace(/[\\/]$/, "")}/${file.path}`), t))
-          .child(this.fileMenu(t, cx))))
+          .child(this.fileMenu(t, cx))
+          .when(Boolean(this.documents && !s.on), el => el.child(Button.new("edit-working-file").h(28).px(8).rounded(5).text_size(12).child(s.hash || s.diffMode === "staged" ? "Edit working file" : "Edit").on_click((_e, cx) => this.documents.edit(cx))))))
       .when(Boolean(s?.commit), el => el.child(this.commitCard(t, cx)))
       .when(Boolean(file && status === "U" && !s.hash), el => el.child(this.conflictBanner(t, cx)))
       .when(Boolean(this.actionError), el => el.child(div().px(16).py(8).text_size(12).text_color(t.ansi1).child(this.actionError)))
       .when(Boolean(this.pending), el => el.child(div().px(16).py(8).text_size(11).text_color(t.muted).child("Applying Git action…")))
       .when(Boolean(file), el => el.child(h_flex().h(44).flex_none().px(14).gap(10).items_center().border_b(1).border_color(t.border).overflow_x_scrollbar()
-        .child(this.segments("file-mode", [...(s.gitRoot === null ? [] : [["diff", "Diff"]]), ["source", "Source"], ...(isMarkdown(file.path) ? [["markdown", "Preview"]] : [])], this.mode, (mode, cx) => this.selectMode(mode, cx), t))
+        .when(Boolean(this.review && !s.on), el => el.child(Button.new("open-review-tools").h(28).px(8).rounded(5).text_size(12).child("Review").on_click((_e, cx) => { this.mode = "review"; this.review.mode = "compare"; cx.notify(); })))
+        .child(this.segments("file-mode", [...(s.gitRoot === null ? [] : [["diff", "Diff"]]), ["source", "Source"], ...(isMarkdown(file.path) ? [["markdown", "Preview"]] : []), ...(/\.(png|jpe?g|svg)$/i.test(file.path) && !s.on && !s.hash ? [["asset", "Image"]] : [])], this.mode, (mode, cx) => this.selectMode(mode, cx), t))
         .child(div().flex_none().text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().flex_none().text_size(11).text_color(t.ansi1).child(`−${del}`))
         .child(div().flex_1())
         .when(this.mode === "diff", el => el.child(this.segments("diff-layout", [["unified", "Unified"], ["split", "Split"]], this.layout, (layout, cx) => { this.layout = layout; cx.notify(); }, t)))))
-      .when(this.mode !== "markdown", el => el
+      .when(this.mode === "asset", el => el.child(div().flex_1().min_h(0).id("asset-preview").overflow_scrollbar().p(20).child(this.asset ? image(this.asset.path).w(Math.min(720, this.asset.width)).h(Math.min(720, this.asset.width) * this.asset.height / this.asset.width) : div().text_color(t.muted).child(this.error || "Loading image…"))))
+      .when(this.mode === "review", el => el.child(this.review.render(t, cx)))
+      .when(this.mode === "edit", el => el.child(this.documents.render(t, cx)))
+      .when(this.mode !== "markdown" && this.mode !== "edit" && this.mode !== "review" && this.mode !== "asset", el => el
         .when(split && Boolean(file), el => el.child(h_flex().h(28).flex_none().border_b(1).border_color(t.border).text_size(11).text_color(t.muted)
           .child(div().flex_1().px(14).border_r(1).border_color(t.border).child(s.hash ? "Parent · before" : s.diffMode === "staged" || s.diffMode === "all" ? "HEAD · before" : "Index · before"))
           .child(div().flex_1().px(14).child(s.hash ? "Commit · after" : s.diffMode === "staged" ? "Index · after" : "Working tree · after"))))
@@ -352,7 +371,7 @@ export default class FilePreview extends View {
             .child(div().w_full().min_w(split ? 700 : sourceMode ? this.sourceWidth || this.diffWidth || 300 : (this.diffWidth || 300) + 50).h_full()
               .child(v_virtual_list("file-diff", split ? this.split?.length || 0 : rows.length, 24, i => String(i), range => split
                 ? this.split.slice(range.start, range.end).map(pair => this.splitRow(pair, t))
-                : rows.slice(range.start, range.end).map(row => this.diffRow(row, t, sourceMode))).size_full())))
+                : rows.slice(range.start, range.end).map(row => this.diffRow(row, t, sourceMode))).size_full().when(Boolean(this.scroll), el => el.track_scroll(this.scroll)))))
           .child(Scrollbar.vertical("file-diff").viewport_from_layout().absolute().inset_0())
           .when(Boolean(error) || !file || (!rows.length && !split), el => el.child(div().absolute().top(20).px(20).text_color(error ? t.ansi1 : t.muted)
             .child(error || (!file ? s?.commit ? "This commit has no changed files." : "Select a file from Files, Changes, History or Graph" : this.loading || this.sourceLoading ? "Loading file…" : "This file is empty.")))))
@@ -368,6 +387,6 @@ export default class FilePreview extends View {
         .when(this.markdown?.truncated, el => el.child(div().px(20).py(8).text_size(11).text_color(t.muted).child("Markdown preview limited to the first 200,000 characters"))))
       .when(Boolean(file), el => el.child(h_flex().h(28).flex_none().px(16).gap(14).items_center().border_t(1).border_color(t.border).text_size(11).text_color(t.muted)
         .child(div().child(language)).when(Boolean((this.mode === "markdown" ? this.markdown : result)?.lineEnding), el => el.child(div().child((this.mode === "markdown" ? this.markdown : result).lineEnding)))
-        .child(div().flex_1()).child(div().child(s.hash ? "Commit preview" : "Read-only preview"))));
+        .child(div().flex_1()).child(div().child(this.mode === "edit" ? "Working file" : s.hash ? "Commit preview" : "Read-only preview"))));
   }
 }
