@@ -138,7 +138,7 @@ export class CommitGenerator {
       .when(Boolean(connection), el => el
         .child(this.option("generation-back", `Back · ${connection.name}`, cx => { this.picking = null; this.search.set_value(""); this.focus.focus(); cx.notify(); }, t))
         .child(div().h(30).px(8).child(Input.new(this.search).h_full().text_size(12)))
-        .child(v_flex().id("generation-models").h(Math.min(270, Math.max(32, models.length * 42))).overflow_y_scrollbar().track_scroll(this.scroll).gap(1)
+        .child(v_flex().id("generation-models").h(Math.min(270, Math.max(42, (connection?.models.length || 0) * 42))).overflow_y_scrollbar().track_scroll(this.scroll).gap(1)
           .children(models.map((model, index) => this.option(`generate-model-${model.id}`, v_flex().min_w(0).gap(2)
             .child(div().truncate().child(model.name)).child(div().truncate().text_size(10).text_color(t.muted).child(model.id)), cx => this.choose(model, cx), t)
             .bg(this.at === index ? t.hover : "#00000000").accessibility_label(`Use ${model.name}`)))

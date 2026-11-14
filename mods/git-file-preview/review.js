@@ -76,7 +76,7 @@ export class Review {
           cx.stop_propagation(); cx.notify();
         })
         .child(Input.new(this.search).h(30).accessibility_label("Filter comparison branches"))
-        .child(v_flex().id("review-branch-list").max_h(260).overflow_y_scrollbar().track_scroll(this.scroll)
+        .child(v_flex().id("review-branch-list").h(Math.min(260, Math.max(30, this.branches.length * 30))).overflow_y_scrollbar().track_scroll(this.scroll)
           .children(choices.map((branch, i) => button(`review-branch-${branch.ref}`, branch.name, cx => this.choose(branch, cx))
             .w_full().h(30).flex_none().justify_start().truncate().bg(i === this.at ? t.selected : t.popover).accessibility_label(`Compare with ${branch.name}`)))
           .when(!choices.length, el => el.child(div().p(8).text_color(t.muted).child("No matching branches")))));

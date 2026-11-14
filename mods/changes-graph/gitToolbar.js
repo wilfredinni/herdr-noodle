@@ -25,6 +25,7 @@ const ACTIONS = [
   ["pull", "Pull", ["pull", "--ff-only"], "download"],
   ["rebase", "Pull (Rebase)", ["pull", "--rebase"], "rebase"],
   ["push", "Push", ["push"], "upload"],
+  ["publish", "Publish Branch…", null, "upload"],
   ["push-to", "Push To…", null, "upload"],
   ["force", "Force Push…", null, "warning"],
 ];
@@ -62,7 +63,7 @@ export class GitToolbar {
 
   choices() {
     const branches = this.filtered(), creation = this.creation;
-    return creation?.valid && creation.name === this.newBranchName() ? [...branches, { name: creation.name, create: true }] : branches;
+    return (creation?.valid || creation?.pending) && creation.name === this.newBranchName() ? [...branches, { name: creation.name, create: true, pending: creation.pending }] : branches;
   }
 
   validateBranch(cx) {
@@ -70,16 +71,19 @@ export class GitToolbar {
     this.creation = null;
     if (!name || this.open !== "branches" || this.loading || this.error || !this.current(s)) { cx.notify(); return; }
     this.creation = { name, pending: true };
-    cx.spawn(async cx => {
-      try {
-        const result = await exec("git", [...READ, "check-ref-format", "--branch", name], { cwd: s.root, on: s.on });
-        if (version !== this.createVersion || !this.current(s) || name !== this.newBranchName()) return;
-        const valid = result.code === 0 && result.stdout.trim() === name;
-        this.creation = { name, valid, error: valid ? null : "Use a valid Git branch name." };
-      } catch (e) {
-        if (version === this.createVersion && this.current(s)) this.creation = { name, valid: false, error: e.message };
-      }
-      cx.notify();
+    cx.timer.after(150, cx => {
+      if (version !== this.createVersion || !this.current(s) || this.open !== "branches") return;
+      cx.spawn(async cx => {
+        try {
+          const result = await exec("git", [...READ, "check-ref-format", "--branch", name], { cwd: s.root, on: s.on });
+          if (version !== this.createVersion || !this.current(s) || name !== this.newBranchName() || this.open !== "branches") return;
+          const valid = result.code === 0 && result.stdout.trim() === name;
+          this.creation = { name, valid, error: valid ? null : "Use a valid Git branch name." };
+        } catch (e) {
+          if (version === this.createVersion && this.current(s) && this.open === "branches") this.creation = { name, valid: false, error: e.message };
+        }
+        cx.notify();
+      });
     });
     cx.notify();
   }
@@ -163,6 +167,18 @@ export class GitToolbar {
         if (!this.current(s) || sequence !== this.sequence) return;
         if (r.code !== 0) throw new Error(r.stderr || "Cannot read remotes");
         this.remotes = r.stdout.split("\n").filter(Boolean);
+        if (id === "publish") {
+          let remote;
+          for (const key of [`branch.${s.branch}.pushRemote`, "remote.pushDefault", `branch.${s.branch}.remote`]) {
+            const config = await exec("git", [...READ, "config", "--get", key], { cwd: s.root, on: s.on });
+            if (config.code !== 0 && config.code !== 1) throw new Error(config.stderr || "Cannot read the push remote");
+            if (config.code === 0) { remote = config.stdout.trim(); break; }
+          }
+          remote ||= this.remotes.includes("origin") ? "origin" : this.remotes.length === 1 ? this.remotes[0] : null;
+          if (!this.current(s) || sequence !== this.sequence) return;
+          if (remote && !this.remotes.includes(remote)) throw new Error(`Push remote ${remote} is not configured.`);
+          if (remote) { this.loading = false; this.remote(remote, cx); }
+        }
       } catch (e) { if (this.current(s) && sequence === this.sequence) this.error = e.message; }
       finally { if (sequence === this.sequence) this.loading = false; cx.notify(); }
     });
@@ -175,6 +191,7 @@ export class GitToolbar {
     if (this.mode === "fetch-from") { this.run(`Fetch from ${name}`, ["fetch", "--", name], cx, s); return; }
     if (!s.branch) return;
     const ref = `refs/heads/${s.branch}`;
+    if (this.mode === "publish") { this.run("Publish branch", ["push", "--set-upstream", "--", name, `HEAD:${ref}`], cx, s, s.head); return; }
     if (this.mode === "push-to") { this.run(`Push to ${name}`, ["push", "--", name, `HEAD:${ref}`], cx, s); return; }
     if (this.mode !== "force") return;
     const sequence = this.sequence;
@@ -191,6 +208,11 @@ export class GitToolbar {
       finally { if (sequence === this.sequence) this.loading = false; cx.notify(); }
     });
     cx.notify();
+  }
+
+  publish(cx, snapshot) {
+    if (!this.current(snapshot) || !this.enabled() || !snapshot.branch || !snapshot.head) return;
+    this.show("actions", true, cx); this.menuContext = snapshot; this.action("publish", cx);
   }
 
   run(label, args, cx, snapshot = this.menuContext, expectedHead) {
@@ -246,8 +268,9 @@ export class GitToolbar {
     return v_flex().min_h(0).gap(4)
       .child(div().px(8).py(4).text_size(11).text_color(t.muted).child("Local Branches"))
       .child(div().h(28).px(8).border_b(1).border_color(t.border).child(Input.new(this.search).h_full().text_size(12).accessibility_label("Filter or create a branch")))
-      .child(v_flex().id("git-branch-list").h(Math.min(290, branches.length * 46)).min_h(0).overflow_y_scrollbar().track_scroll(this.scroll).children(branches.map((b, i) => {
+      .child(v_flex().id("git-branch-list").h(Math.min(290, Math.max(46, (this.branches.length + 1) * 46))).min_h(0).overflow_y_scrollbar().track_scroll(this.scroll).children(branches.map((b, i) => {
         if (b.create) return Button.new("git-create-branch").h_flex().w_full().h(46).flex_none().px(8).gap(8).items_center().rounded(4).font_normal()
+          .disabled(Boolean(b.pending))
           .accessibility_label(`Create branch ${b.name}`).bg(i === this.at ? t.selected : t.popover).hover(el => el.bg(t.hover))
           .on_click((_e, cx) => this.createBranch(b.name, cx))
           .child(svg("mods/workspace-chrome/plus.svg").size(13).flex_none().text_color(t.muted))
@@ -261,8 +284,8 @@ export class GitToolbar {
           .child(svg(current ? "mods/workspace-chrome/check.svg" : "mods/changes-graph/branch.svg").size(13).flex_none().text_color(current ? t.accent : t.muted))
           .child(v_flex().flex_1().min_w(0).gap(2).child(div().truncate().text_size(12).text_color(t.foreground).child(b.name))
             .child(div().truncate().text_size(10.5).text_color(t.muted).child(`${b.author} · ${shortAge(b.timestamp)} · ${b.subject}`)));
-      })))
-      .when(!branches.length, el => el.child(div().p(8).text_size(11).text_color(t.muted).child(this.loading ? "Loading branches…" : this.error || (this.creation?.pending ? "Checking branch name…" : this.creation?.error || "No matching local branches"))));
+      }))
+      .when(!branches.length, el => el.child(div().p(8).text_size(11).text_color(t.muted).child(this.loading ? "Loading branches…" : this.error || this.creation?.error || "No matching local branches"))));
   }
 
   worktreeBody() {
@@ -270,14 +293,14 @@ export class GitToolbar {
     return v_flex().min_h(0).gap(4)
       .child(div().px(8).py(4).text_size(11).text_color(t.muted).child("Worktrees"))
       .child(div().h(28).px(8).border_b(1).border_color(t.border).child(Input.new(this.search).h_full().text_size(12).accessibility_label("Filter worktrees")))
-      .child(v_flex().id("git-worktree-list").h(Math.min(276, rows.length * 46)).min_h(0).overflow_y_scrollbar().track_scroll(this.scroll)
+      .child(v_flex().id("git-worktree-list").h(Math.min(276, Math.max(46, this.worktrees.length * 46))).min_h(0).overflow_y_scrollbar().track_scroll(this.scroll)
         .children(rows.map((row, i) => Button.new(`git-worktree-${row.root}`).h_flex().w_full().h(46).flex_none().px(8).gap(8).items_center().rounded(4).font_normal()
           .disabled(this.loading || this.owner.busy).accessibility_label(`Select worktree ${row.name}`).tooltip(row.root).bg(i === this.at ? t.selected : t.popover).hover(el => el.bg(t.hover))
           .on_click((_e, cx) => this.switchWorktree(row, cx))
           .child(svg(row.root === this.owner.root ? "mods/workspace-chrome/check.svg" : "mods/changes-graph/worktree.svg").size(13).flex_none().text_color(t.muted))
           .child(v_flex().flex_1().min_w(0).gap(2).child(div().truncate().text_size(12).text_color(t.foreground).child(row.name))
-            .child(div().truncate().text_size(10.5).text_color(t.muted).child(`${row.branch} · ${row.root}`))))))
-      .when(!rows.length, el => el.child(div().p(8).text_size(11).text_color(t.muted).child(this.loading ? "Loading worktrees…" : this.error || "No matching worktrees")))
+            .child(div().truncate().text_size(10.5).text_color(t.muted).child(`${row.branch} · ${row.root}`)))))
+        .when(!rows.length, el => el.child(div().p(8).text_size(11).text_color(t.muted).child(this.loading ? "Loading worktrees…" : this.error || "No matching worktrees"))))
       .child(div().h(1).bg(t.border))
       .child(this.option("git-new-worktree", "New worktree…", cx => this.newWorktree(cx), this.loading, "worktree"));
   }
@@ -300,7 +323,7 @@ export class GitToolbar {
       .when(this.loading || this.error || !this.remotes.length, el => el.child(div().p(8).text_size(11).text_color(this.error ? t.ansi1 : t.muted).child(this.loading ? "Loading…" : this.error || "No remotes configured")));
     return v_flex().gap(1).children(ACTIONS.flatMap(([id, label, , icon]) => [
       ...(["pull", "push"].includes(id) ? [div().h(1).mx(4).my(4).bg(t.border)] : []),
-      this.option(`git-action-${id}`, label, cx => this.action(id, cx), !p.branch && !id.startsWith("fetch"), icon),
+      this.option(`git-action-${id}`, label, cx => this.action(id, cx), (!p.branch && !id.startsWith("fetch")) || (id === "publish" && !p.head), icon),
     ]));
   }
 
@@ -335,10 +358,11 @@ export class GitToolbar {
     this.colors = t;
     const p = this.owner, enabled = this.enabled(), hasRepository = Boolean(p.root && p.context === this.key()), branch = p.branch || (p.head ? `Detached · ${p.head.slice(0, 8)}` : "No branch");
     const sync = hasRepository && p.branch ? p.sync : null, snapshot = this.snapshot();
-    const primary = sync?.behind > 0 ? { label: `Pull (${sync.behind})`, args: ["pull", "--ff-only"], icon: "download" }
+    const primary = hasRepository && p.branch && p.head && !sync ? { label: "Publish", icon: "upload" }
+      : sync?.behind > 0 ? { label: `Pull (${sync.behind})`, args: ["pull", "--ff-only"], icon: "download" }
       : sync?.ahead > 0 ? { label: `Push (${sync.ahead})`, args: ["push"], icon: "upload" }
       : { label: "Fetch", args: ["fetch", "--all"], icon: "fetch" };
-    const description = sync ? `${sync.ahead} outgoing · ${sync.behind} incoming · ${sync.upstream}` : "Fetch all remotes";
+    const description = primary.label === "Publish" ? "Publish this branch and set its upstream" : sync ? `${sync.ahead} outgoing · ${sync.behind} incoming · ${sync.upstream}` : "Fetch all remotes";
     const worktree = p.mainWorktree === p.root && p.root ? "main" : p.root?.split(/[\\/]/).filter(Boolean).pop() || "Worktree";
     const worktreeTrigger = Button.new("git-current-worktree").h_flex().h(28).min_w(0).max_w(150).flex_shrink(1).px(6).gap(6).items_center().justify_start().rounded(6)
       .bg(this.open === "worktrees" ? t.hover : "#00000000").border_1().border_color("#00000000").font_normal().text_size(12).text_color(hasRepository ? t.muted : t.dim)
@@ -361,7 +385,7 @@ export class GitToolbar {
       .child(h_flex().flex_none().h(28).items_center()
         .child(Button.new("git-fetch").h_flex().h(28).px(6).gap(6).items_center().rounded(6).bg("#00000000").border_1().border_color("#00000000").font_normal().text_size(12).text_color(hasRepository ? t.muted : t.dim).disabled(!enabled)
           .accessibility_label(primary.label === "Fetch" ? "Fetch all remotes" : primary.label).tooltip(description).hover(s => s.bg(t.hover).text_color(t.foreground)).focus(s => s.border_color(t.accent))
-          .on_click((_e, cx) => this.run(primary.label, primary.args, cx, snapshot, primary.args[0] === "fetch" ? undefined : snapshot.head))
+          .on_click((_e, cx) => primary.label === "Publish" ? this.publish(cx, snapshot) : this.run(primary.label, primary.args, cx, snapshot, primary.args[0] === "fetch" ? undefined : snapshot.head))
           .child(svg(this.remoteRunning ? "mods/workspace-chrome/spinner.svg" : `mods/changes-graph/${primary.icon}.svg`).id(this.remoteRunning ? "fetch-action-spinner" : "fetch-action-icon").size(13).flex_none().when(Boolean(this.remoteRunning), el => el.spin(900)))
           .child(primary.label))
         .child(this.menu("actions", dropdown, this.actionBody(), 230, cx)));

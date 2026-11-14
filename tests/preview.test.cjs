@@ -69,6 +69,17 @@ test('preview header matches file-type icons for nested paths and unknown extens
   }
 });
 
+test('comparison branch filtering keeps its popup list height', () => {
+  const h = harness(null), review = h.view.review, theme = h.c.theme();
+  review.branches = [{ name: 'main', ref: 'refs/heads/main' }, { name: 'topic', ref: 'refs/heads/topic' }];
+  const button = (id, label) => element(id).child(label);
+  const height = find(review.branchPicker(theme, h.cx, button), 'review-branch-list').attrs.h[0];
+  review.search.set_value('no-match');
+  const tree = review.branchPicker(theme, h.cx, button);
+  assert.equal(find(tree, 'review-branch-list').attrs.h[0], height);
+  assert.match(texts(tree), /No matching branches/);
+});
+
 test('unified line numbers and split pairs preserve hunk positions and unequal replacements', () => {
   const h = harness(null), rows = h.c.diffRows(['@@ -8,3 +20,4 @@', ' keep', '-old1', '-old2', '+new1', '+new2', '+new3', '@@ -30 +40 @@', ' tail']);
   assert.deepEqual(Array.from(rows, r => [r.oldNumber ?? null, r.newNumber ?? null]), [[null,null],[8,20],[9,null],[10,null],[null,21],[null,22],[null,23],[null,null],[30,40]]);

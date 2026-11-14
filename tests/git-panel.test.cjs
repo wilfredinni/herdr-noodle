@@ -183,7 +183,102 @@ test('primary Git action follows real upstream counts without fetching', async t
   h.view.refresh(h.cx); await h.flush();
   assert.equal(h.view.sync, null);
   button = find(h.view.gitToolbar.render(h.t, h.cx), 'git-fetch');
-  assert.equal(texts(button).trim(), 'Fetch');
+  assert.equal(texts(button).trim(), 'Publish');
+});
+
+test('Publish creates the branch on a local bare remote and sets its upstream', async t => {
+  const root = fixture(t), remote = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-publish-'));
+  t.after(() => fs.rmSync(remote, { recursive: true, force: true }));
+  git(root, 'init', '--bare', '-q', remote); git(root, 'remote', 'add', 'origin', remote);
+  git(root, 'switch', '-qc', 'feat/publish'); fs.writeFileSync(path.join(root, 'a.txt'), 'unsaved working changes\n');
+  const before = git(root, 'status', '--porcelain'), h = harness(root); await h.flush();
+  const button = find(h.view.gitToolbar.render(h.t, h.cx), 'git-fetch');
+  assert.equal(texts(button).trim(), 'Publish');
+  assert.equal(button.attrs.tooltip[0], 'Publish this branch and set its upstream');
+  button.handlers.click({}, h.cx); await h.flush();
+  assert.deepEqual(h.errors, []);
+  assert.equal(git(remote, 'rev-parse', 'refs/heads/feat/publish'), git(root, 'rev-parse', 'HEAD'));
+  assert.equal(git(root, 'rev-parse', '--abbrev-ref', '@{upstream}').trim(), 'origin/feat/publish');
+  assert.equal(git(root, 'status', '--porcelain'), before);
+  assert.equal(h.view.gitToolbar.loading, false);
+  assert.equal(texts(find(h.view.gitToolbar.render(h.t, h.cx), 'git-fetch')).trim(), 'Fetch');
+});
+
+test('Publish honors the configured push remote instead of origin', async t => {
+  const root = fixture(t), remotes = ['origin', 'backup'].map(name => {
+    const folder = fs.mkdtempSync(path.join(os.tmpdir(), `herdr-${name}-`));
+    t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+    git(root, 'init', '--bare', '-q', folder); git(root, 'remote', 'add', name, folder); return folder;
+  });
+  git(root, 'config', 'remote.pushDefault', 'origin'); git(root, 'config', 'branch.main.pushRemote', 'backup');
+  const h = harness(root); await h.flush();
+  find(h.view.gitToolbar.render(h.t, h.cx), 'git-fetch').handlers.click({}, h.cx); await h.flush();
+  assert.deepEqual(h.errors, []);
+  assert.equal(git(root, 'rev-parse', '--abbrev-ref', '@{upstream}').trim(), 'backup/main');
+  assert.equal(git(remotes[0], 'for-each-ref', 'refs/heads').trim(), '');
+});
+
+test('Publish asks for an ambiguous remote and reports missing remotes', async t => {
+  const root = fixture(t), h = harness(root); await h.flush();
+  let toolbar = h.view.gitToolbar;
+  find(toolbar.render(h.t, h.cx), 'git-fetch').handlers.click({}, h.cx); await h.flush();
+  assert.equal(toolbar.mode, 'publish'); assert.match(texts(toolbar.actionBody()), /No remotes configured/);
+  git(root, 'remote', 'add', 'first', '/not-contacted/first'); git(root, 'remote', 'add', 'second', '/not-contacted/second');
+  toolbar.publish(h.cx, toolbar.snapshot()); await h.flush();
+  assert.equal(toolbar.mode, 'publish'); assert.ok(find(toolbar.actionBody(), 'git-remote-first')); assert.ok(find(toolbar.actionBody(), 'git-remote-second'));
+  assert.equal(git(root, 'config', '--get-regexp', '^remote\\..*\\.url$').trim().split('\n').length, 2);
+  assert.deepEqual(h.errors, []);
+});
+
+test('Publish refuses to push if HEAD changed after the button was shown', async t => {
+  const root = fixture(t), h = harness(root); await h.flush();
+  git(root, 'remote', 'add', 'origin', '/not-contacted/remote');
+  const toolbar = h.view.gitToolbar, snapshot = toolbar.snapshot();
+  git(root, 'commit', '--allow-empty', '-qm', 'Changed HEAD');
+  toolbar.publish(h.cx, snapshot); await h.flush();
+  assert.match(h.errors[0], /HEAD changed/);
+});
+
+test('branch validation coalesces typing and keeps its row and list height stable', async t => {
+  const h = harness(fixture(t)), timers = []; h.cx.timer.after = (ms, fn) => timers.push({ ms, fn }); await h.flush();
+  const toolbar = h.view.gitToolbar; toolbar.show('branches', true, h.cx); await h.flush(); toolbar.render(h.t, h.cx);
+  const height = find(toolbar.branchBody(), 'git-branch-list').attrs.h[0];
+  const exec = h.c.exec, validations = [];
+  h.c.exec = (command, args, options) => { if (args.includes('check-ref-format')) validations.push(args.at(-1)); return exec(command, args, options); };
+  for (const name of ['feat/i', 'feat/in', 'feat/interactive']) {
+    toolbar.search.set_value(name); toolbar.validateBranch(h.cx);
+    const body = toolbar.branchBody(); assert.equal(find(body, 'git-branch-list').attrs.h[0], height);
+    assert.equal(find(body, 'git-create-branch').attrs.disabled[0], true);
+  }
+  assert.equal(validations.length, 0); assert.ok(timers.every(timer => timer.ms === 150));
+  timers.splice(0).forEach(timer => timer.fn(h.cx)); await h.flush();
+  assert.deepEqual(validations, ['feat/interactive']); assert.equal(find(toolbar.branchBody(), 'git-create-branch').attrs.disabled[0], false);
+  assert.equal(find(toolbar.branchBody(), 'git-branch-list').attrs.h[0], height);
+  toolbar.search.set_value('bad..branch'); toolbar.validateBranch(h.cx); timers.splice(0).forEach(timer => timer.fn(h.cx)); await h.flush();
+  assert.equal(find(toolbar.branchBody(), 'git-create-branch'), undefined);
+  assert.equal(find(toolbar.branchBody(), 'git-branch-list').attrs.h[0], height);
+  assert.match(texts(toolbar.branchBody()), /valid Git branch name/);
+  toolbar.search.set_value('feat/closed'); toolbar.validateBranch(h.cx); toolbar.open = null;
+  timers.splice(0).forEach(timer => timer.fn(h.cx)); await h.flush(); assert.equal(validations.length, 2);
+  toolbar.worktrees = [{ root: '/one', name: 'one', branch: 'main' }, { root: '/two', name: 'two', branch: 'topic' }];
+  toolbar.search.set_value(''); const worktreeHeight = find(toolbar.worktreeBody(), 'git-worktree-list').attrs.h[0];
+  toolbar.search.set_value('no-match'); assert.equal(find(toolbar.worktreeBody(), 'git-worktree-list').attrs.h[0], worktreeHeight);
+  toolbar.show('branches', true, h.cx); await h.flush();
+  toolbar.search.set_value('feat/new-branch'); toolbar.validateBranch(h.cx);
+  timers.splice(0).forEach(timer => timer.fn(h.cx)); await h.flush();
+  toolbar.createBranch('feat/new-branch', h.cx); await h.flush();
+  assert.deepEqual(h.errors, []);
+  assert.equal(h.view.branch, 'feat/new-branch');
+  assert.equal(texts(find(toolbar.render(h.t, h.cx), 'git-fetch')).trim(), 'Publish');
+});
+
+test('detached HEAD and an unborn branch keep Fetch instead of Publish', async t => {
+  const root = fixture(t), h = harness(root); await h.flush();
+  git(root, 'switch', '--detach', '-q'); h.view.refresh(h.cx); await h.flush();
+  assert.equal(texts(find(h.view.gitToolbar.render(h.t, h.cx), 'git-fetch')).trim(), 'Fetch');
+  git(root, 'switch', '--orphan', 'empty', '-q'); h.view.refresh(h.cx); await h.flush();
+  assert.equal(h.view.head, '');
+  assert.equal(texts(find(h.view.gitToolbar.render(h.t, h.cx), 'git-fetch')).trim(), 'Fetch');
 });
 
 test('History marks only commits absent from the tracked remote, including file history', async t => {
