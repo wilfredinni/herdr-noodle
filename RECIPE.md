@@ -23,7 +23,7 @@ A compact coding workspace with per-space agent counts in the sidebar, a separat
 
 - Use Herdr's live agent states. **Working** uses the native rotating 12 px sidebar spinner. **Blocked** uses a compact exclamation mark or “Needs you” badge in the blocked color. **Done** is a filled dot until seen. **Idle** is an outlined ring. These are agent indicators, independent of Git and generation activity.
 - Space clicks select the space; machine/worktree expansion, new spaces, context menus, and drag ordering keep the shipped space behavior. Do not reintroduce the discarded Better Sidebar layout or its agent tree.
-- Folder rows expand lazily. Clicking a file opens or reuses `git-file-preview` beside the terminal. Markdown Preview renders the selected document; Source/Diff returns to the shared source/diff component. Follow the source terminal's folder when the preview has focus.
+- Folder rows expand lazily. Clicking a file opens or reuses `file-editor` beside the terminal, with native syntax highlighting and ⌘S / Ctrl+S save. Keep recovery drafts and reject stale saves. Changes and its tabs open `git-file-preview`, preserving its Diff/Source/Markdown modes. Follow the source terminal's folder when either pane has focus.
 - Match the HTML prototype's shared preview: a 58 px path/repository header with Close, Copy path and a file menu; a 44 px toolbar with Diff/Source/Markdown tabs, insertion/deletion counts and Unified/Split; 24 px virtualized code rows with old/new line numbers and aligned split replacements. Keep theme colors and a compact language/line-ending footer. Render real commit metadata and horizontally scrollable file chips above the diff; keep commit Source/Markdown pinned to its revision, including deleted files. Empty commits still show their metadata.
 - Route preview writes through Changes' existing action helpers, bound to the displayed repository, branch, HEAD and selection. Keep historical previews read-only. Preview menus include file history, stage/unstage, ignore/exclude and confirmed discard/Trash. Conflict review reads the current marker blocks, offers current/incoming/both and manually resolved content, then requires confirmation before writing and staging. Preserve surrounding text, diff3 blocks and line endings; reject stale file/index/HEAD, symlinks, binary files, malformed markers and files larger than 400,000 bytes.
 - Refresh working-file previews only for relevant file/Git events or the periodic fallback, defer hidden tabs until shown, and reuse syntax colors when content is unchanged. Cache Files' tracked paths against the local index checksum; fall back to fresh reads for remote, unreadable, or zero-checksum indexes. Read OpenCode connections and quotas without spending statistics.
@@ -38,7 +38,7 @@ A compact coding workspace with per-space agent counts in the sidebar, a separat
 - Only Generate's icon spins during commit-message generation. File staging and branch switching do not spin Fetch or Generate, change their labels, or dim unrelated controls. Coordinate conflicting actions through the busy guard while keeping the appearance steady.
 - Failures use a compact `git-error` dialog with a clear title, visible details, and Close/Escape. Do not insert a large error block in the file list or hide details behind a disclosure.
 - Usage refreshes every five minutes, scoped to the active machine (and project for OpenCode). Keep dated last-good readings on transient failure; clear removed/sign-out connections. Show expired quota windows as awaiting refresh, not synthetic zero. Put missing installations together at the end of the popup. No API estimate rows, account breakdown, billing note, or Commands shortcut appears in this footer.
-- Use native `.spin(900)` for motion, never a redraw timer for a spinner. Existing Herdr shortcuts continue to work; there are no package-specific key overrides.
+- Use native `.spin(900)` for motion, never a redraw timer for a spinner. Existing Herdr shortcuts continue to work; the file editor binds ⌘S / Ctrl+S only inside its own keyboard context.
 
 ## Built from
 
@@ -63,14 +63,15 @@ root (row)
     └── status: workspace-usage
 ```
 
-Ship six personal mods:
+Ship seven personal mods:
 
 | Mod | Responsibility |
 | --- | --- |
 | `spaces-paths` | Two-line space rows; shipped space/machine/worktree behavior. |
-| `files-browser` | Lazy folder tree, file-type icons, Git status, open file previews. |
+| `files-browser` | Lazy folder tree, file-type icons, Git status, open the separate file editor. |
 | `changes-graph` | Changes, staging/context menus, History/Graph, stash previews/actions, branch/remote actions, commits, generation. |
 | `git-file-preview` | Source, colored diffs, change gutters, rendered Markdown; receives a `selectionKey` prop. |
+| `file-editor` | Local text editing, native syntax highlighting, ⌘S / Ctrl+S save and recoverable drafts; receives its own `selectionKey`. |
 | `git-error` | Error dialog; receives title/message/detail and overlay props. |
 | `workspace-usage` | CLI usage collector, normalization, compact quota footer and details popup. |
 
@@ -98,9 +99,9 @@ Runtime programs are Git, Python 3, platform shell tools (`sh`, or Windows Power
 ## Done when
 
 1. `herdr-app check` passes for every included mod; switching to `noodle` shows the layout without runtime errors.
-2. A fresh configuration install creates only the layout/preview and six mods. A conflicting name leaves all existing files untouched.
+2. A fresh configuration install creates only the layout/preview and seven mods. A conflicting name leaves all existing files untouched.
 3. The sidebar displays a robot icon and live open-agent counts below names with a 32 px avatar; native agent working/blocked/done/idle states remain distinct.
-4. Files opens source and Markdown. Changes and History/Graph open the same diff component. Source and diff content remain bounded and the active repository follows the original terminal.
+4. Files opens the separate file editor, with syntax highlighting and ⌘S / Ctrl+S save. Changes, History/Graph and Stash keep the same diff component. Source and diff content remain bounded and the active repository follows the original terminal.
 5. In a disposable Git repository, checked files commit only staged content; an unchecked set commits all current new/modified/deleted files; partially staged hunks remain intact.
 6. History has no ref badges, Graph does, and creating a valid missing branch does not reset existing branches or overwrite dirty files.
 7. Commit and Generate match at 28 px height, appear in that order at the right, and the three-line text area is borderless on the darker surface below the divider.

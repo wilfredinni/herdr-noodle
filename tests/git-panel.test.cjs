@@ -311,3 +311,15 @@ test('preview requests cannot mutate another selection or a historical commit', 
   h.view.render(h.cx); await h.flush(); assert.ok(h.state.get(`${key}.result`).error);
   assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'working\n');
 });
+
+test('commit composer, sync toolbar and last commit appear only in Changes and keep the draft across tabs', async t => {
+  const h = harness(fixture(t)); await h.flush();
+  h.view.message = 'Keep this draft'; h.view.input.set_value(h.view.message);
+  const ids = ['git-fetch', 'commit-message', 'commit', 'generate-commit-message', 'last-commit-row'];
+  for (const view of ['changes', 'history', 'graph', 'stashes', 'changes']) {
+    h.view.selectView(view, h.cx); await h.flush();
+    const tree = h.view.render(h.cx);
+    for (const id of ids) assert.equal(Boolean(find(tree, id)), view === 'changes', `${view}: ${id}`);
+    assert.equal(h.view.message, 'Keep this draft'); assert.equal(h.view.input.value(), 'Keep this draft');
+  }
+});

@@ -13,7 +13,7 @@ import { git, stage, trash, addIgnore } from "./fileOps.js";
 function sourceLocation() {
   const space = spaces().find((s) => s.active), f = focused();
   const all = panes(), active = f?.pane ? all.find(p => p.pane === f.pane) : null;
-  const selection = active?.mod === "git-file-preview" ? shared(`git-file-preview.${f.tab}`) : null;
+  const selection = ["git-file-preview", "file-editor"].includes(active?.mod) ? shared(`${active.mod}.${f.tab}`) : null;
   const pane = selection ? all.find(p => p.pane === selection.sourcePane) : active;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
@@ -577,16 +577,17 @@ export default class Changes extends View {
           .child(Scrollbar.vertical("changes-list").absolute().inset_0()))
         .when(this.limited, el => el.child(div().px(14).py(6).text_size(11).text_color(t.muted).child("Showing the first 1,000 changed files"))))
       .when(Boolean(this.note), el => el.child(div().px(14).py(8).text_size(12).text_color(t.ansi1).child(this.note)))
-      .child(this.gitToolbar.render(t, cx).border_t(1).border_color(t.border))
-      .child(v_flex().flex_none().p(14).gap(10).border_t(1).border_color(t.border).bg(t.canvas)
-        .child(div().id("commit-message").w_full().min_w(0).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-          .child(Textarea.new(this.input).w_full().h(54).text_size(12).line_height("18px").text_color(t.foreground).accessibility_label("Commit message")))
-        .child(h_flex().w_full().items_center().justify_end().gap(8)
-          .child(Button.new("commit").h(28).px(10).flex().items_center().rounded(5).border_1().border_color(t.border).bg(t.raised).text_color(hasMessage ? t.foreground : t.dim).text_size(12).font_normal().disabled(!enabled)
-            .accessibility_label(selectedCount ? `Commit ${selectedCount} staged files` : "Commit all changes").tooltip(selectedCount ? "Commit staged content only" : "Stage and commit all reviewed changes")
-            .hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent)).on_click((_e, cx) => this.commit(cx))
-            .child(this.committing ? "Committing…" : selectedCount ? `Commit ${selectedCount} ${selectedCount === 1 ? "file" : "files"}` : "Commit all"))
-          .child(this.generator.render(t, cx))))
-      .when(Boolean(this.lastCommit && this.root), el => el.child(this.lastCommitRow(t, cx, current)));
+      .when(this.view === "changes", panel => panel
+        .child(this.gitToolbar.render(t, cx).border_t(1).border_color(t.border))
+        .child(v_flex().flex_none().p(14).gap(10).border_t(1).border_color(t.border).bg(t.canvas)
+          .child(div().id("commit-message").w_full().min_w(0).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+            .child(Textarea.new(this.input).w_full().h(54).text_size(12).line_height("18px").text_color(t.foreground).accessibility_label("Commit message")))
+          .child(h_flex().w_full().items_center().justify_end().gap(8)
+            .child(Button.new("commit").h(28).px(10).flex().items_center().rounded(5).border_1().border_color(t.border).bg(t.raised).text_color(hasMessage ? t.foreground : t.dim).text_size(12).font_normal().disabled(!enabled)
+              .accessibility_label(selectedCount ? `Commit ${selectedCount} staged files` : "Commit all changes").tooltip(selectedCount ? "Commit staged content only" : "Stage and commit all reviewed changes")
+              .hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent)).on_click((_e, cx) => this.commit(cx))
+              .child(this.committing ? "Committing…" : selectedCount ? `Commit ${selectedCount} ${selectedCount === 1 ? "file" : "files"}` : "Commit all"))
+            .child(this.generator.render(t, cx))))
+        .when(Boolean(this.lastCommit && this.root), el => el.child(this.lastCommitRow(t, cx, current))));
   }
 }

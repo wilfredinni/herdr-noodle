@@ -27,7 +27,7 @@ export class Review {
     const s = this.owner.selection;
     const button = (id, label, fn, disabled = this.busy) => Button.new(id).h(28).px(8).rounded(5).text_size(12).disabled(Boolean(disabled)).on_click((_e, cx) => fn(cx)).child(label);
     return v_flex().id("git-review-tools").flex_1().min_h(0)
-      .child(h_flex().flex_none().px(12).py(8).gap(8).items_center().overflow_x_scrollbar()
+      .child(h_flex().h(44).flex_none().px(12).py(8).gap(8).items_center().overflow_x_scrollbar()
         .child(button("review-hunks", "File hunks", cx => this.load(cx), s.on || s.hash || !s.file || this.busy))
         .child(button("review-compare", "Compare branch", cx => { this.mode = "compare"; this.error = null; cx.notify(); }, s.on || this.busy))
         .child(button("review-pr", "PR / CI", cx => { this.mode = "pr"; this.call("review_pr", {}, cx, data => { this.pr = data; }); }, s.on || this.busy)))

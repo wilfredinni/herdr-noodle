@@ -1,4 +1,4 @@
-// A lazy file browser for the focused pane's folder, with bounded read-only previews.
+// A lazy file browser for the focused pane's folder, with a separate file editor.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button } from "gpui-base";
 import { spaces, panes, focused, exec, watchFolder, theme, window, run, shared, setShared, nextCommand, props, openOverlay } from "herdr";
@@ -12,7 +12,7 @@ import { readFile } from "fs/promises";
 function location() {
   const space = spaces().find(s => s.active), f = focused();
   const all = panes(), active = f?.pane ? all.find(p => p.pane === f.pane) : null;
-  const selection = active?.mod === "git-file-preview" ? shared(`git-file-preview.${f.tab}`) : null;
+  const selection = ["git-file-preview", "file-editor"].includes(active?.mod) ? shared(`${active.mod}.${f.tab}`) : null;
   const pane = selection ? all.find(p => p.pane === selection.sourcePane) : active;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   const workspace = pane?.cwd || selection?.root || f?.cwd || space?.folder;
@@ -150,9 +150,9 @@ export default class Files extends View {
         }
         if (!this.current(context)) return;
         this.git = state; this.error = null; this.watch(cwd, cx);
-        const focus = focused(), selectionKey = focus ? `git-file-preview.${focus.tab}` : null;
+        const focus = focused(), selectionKey = focus ? `file-editor.${focus.tab}` : null;
         const selection = selectionKey ? shared(selectionKey) : null;
-        if (selection?.kind === "file" && selection.root === cwd) {
+        if (selection?.file && selection.kind === "file" && selection.root === cwd) {
           const mark = fileState(state, `${cwd}/${selection.file.path}`);
           const status = ["A", "M", "U", "D"].includes(mark) ? mark : "";
           const gitRoot = mark === "outside" || mark === "ignored" ? null : state.root;
@@ -188,15 +188,15 @@ export default class Files extends View {
     if (!path || !cx || !this.current(this.context)) return;
     const focus = focused();
     if (!focus) return;
-    const all = panes(), existing = all.find(p => p.tab === focus.tab && p.mod === "git-file-preview");
+    const all = panes(), existing = all.find(p => p.tab === focus.tab && p.mod === "file-editor");
     const source = all.find(p => p.pane === focus.pane && p.terminal) || all.find(p => p.tab === focus.tab && p.terminal);
-    if (!source) { this.error = "Open a terminal pane in this tab before opening a file preview"; cx.notify(); return; }
+    if (!source) { this.error = "Open a terminal pane in this tab before opening a file editor"; cx.notify(); return; }
     this.file = path;
-    const selectionKey = `git-file-preview.${focus.tab}`;
+    const selectionKey = `file-editor.${focus.tab}`;
     const status = fileState(this.git, `${this.root}/${path}`);
     setShared(selectionKey, { kind: "file", navigation: options, root: this.root, on: this.on, gitRoot: status === "outside" || status === "ignored" ? null : this.git.root, file: { path, status: ["A", "M", "U", "D"].includes(status) ? status : "" }, hash: null, parent: null, hasHead: false, sourcePane: source.pane });
     if (existing) run("pane.focus", { pane: existing.pane });
-    else run("pane.split", { pane: source.pane, direction: "right", mod: "git-file-preview", props: { selectionKey } });
+    else run("pane.split", { pane: source.pane, direction: "right", mod: "file-editor", props: { selectionKey } });
     cx.notify();
   }
 

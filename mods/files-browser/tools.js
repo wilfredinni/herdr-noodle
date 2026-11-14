@@ -98,7 +98,6 @@ export class FileTools {
     const p = this.owner, root = p.git.root;
     if (!root) return;
     const path = `${p.root}/${this.target}`.slice(root.length + 1);
-    p.show(this.target, cx);
     setShared(`git-file-preview.${focused().tab}.history`, { root, on: p.on, path, sequence: Date.now() });
     run("layout.select", { stack: "panel-body", child: "changes" }); this.dismiss(cx);
   }

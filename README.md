@@ -17,7 +17,7 @@ Requirements: Herdr **0.1.15** (the tested version), Git, and Python **3.9+**. `
 ![Noodle layout](preview.png)
 
 - Spaces show a robot icon and their open-agent count below the name, beside a two-line initial avatar.
-- Files have Git status colors and file-type icons. Files, diffs, and rendered Markdown open beside your terminal.
+- Files have Git status colors and file-type icons. Files opens a separate editor beside your terminal, with syntax highlighting and ⌘S / Ctrl+S to save. Changes and its tabs keep their diff preview.
 - Changes, History, Graph, and Stash share labeled tabs. Staged and working changes have separate collapsible groups and previews; partially staged files appear in both. File menus are available by right-click or the row's ellipsis.
 - The repository heading has its own actions menu. History and Graph use compact tables; Graph adds lanes and inline refs. History marks unpushed commits with an upward arrow, based on the tracked remote's last fetched refs. Hover for the remote branch; unknown/local-only upstreams have no status claim. Stash supports real diff previews, Apply, Pop and confirmed Drop; a failed Pop keeps the stash.
 - The branch toolbar shows **Pull (N)** for incoming commits, **Push (N)** for outgoing commits, or **Fetch** when caught up. Counts use local upstream refs; Fetch remains in the menu. If both directions have commits, Pull takes priority and uses fast-forward only.
@@ -26,8 +26,10 @@ Requirements: Herdr **0.1.15** (the tested version), Git, and Python **3.9+**. `
 - Below the buttons, the latest commit message opens its details. Its Undo button confirms a local soft reset to the first parent, keeping the index and working files unchanged. It restores the old message only when the draft is still empty, and refuses a changed HEAD. Initial commits have no parent and cannot be undone here. Remote history is unchanged.
 - The footer shows compact subscription usage meters with consistent green, warning, and red colors.
 
+The file editor supports local UTF-8 text files up to 1 MiB. It keeps recovery drafts and refuses to overwrite external edits until you review the saved version. Remote files and binary files cannot be edited.
+
 Working-file previews ignore unrelated folder changes and defer refreshes while their tab is hidden.
-The shared preview includes Diff, Source and rendered Markdown tabs, unified or aligned split diffs,
+The Changes preview includes Diff, Source and rendered Markdown tabs, unified or aligned split diffs,
 both line numbers, file statistics, copying paths and file history. History/Graph previews include
 the full commit message, author, parents and file chips; switching files keeps the selected commit.
 The file menu stages, unstages, ignores and confirms discarding or moving untracked files to Trash.
@@ -76,7 +78,7 @@ for mod in mods/*; do herdr-app check "$mod"; done
 
 Python checks cover the package and generation scope. Node is needed only for development tests. Commit tests use disposable repositories and do not call AI providers. Herdr's check validates the initial render; also exercise the installed layout in the app.
 
-Switch back with `herdr-app do layout.switch '{"name":"main"}'`. To uninstall, switch away first, then remove only the `noodle` layout/preview and the six mods you installed after checking that no other layout uses them. These files are listed in [manifest.json](manifest.json).
+Switch back with `herdr-app do layout.switch '{"name":"main"}'`. To uninstall, switch away first, then remove only the `noodle` layout/preview and the seven mods you installed after checking that no other layout uses them. These files are listed in [manifest.json](manifest.json).
 
 ## Sharing
 

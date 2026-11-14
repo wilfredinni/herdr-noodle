@@ -1,0 +1,177 @@
+diff --git a/vendor/gpui-kit/crates/base/src/input/base/element.rs b/vendor/gpui-kit/crates/base/src/input/base/element.rs
+index 2e23301..a746bf9 100644
+--- a/vendor/gpui-kit/crates/base/src/input/base/element.rs
++++ b/vendor/gpui-kit/crates/base/src/input/base/element.rs
+@@ -3279,6 +3279,23 @@ impl<M: InputModeKind> Element for TextElement<M> {
+                     }
+                 }
+ 
++                if let Some(mark) = self.state.read(cx).extras.gutter_marker(buffer_line) {
++                    let unit = (line_height / 20.).max(px(1.));
++                    let x = gutter_bounds.left() + unit;
++                    if let Some(color) = mark.color {
++                        window.paint_quad(fill(Bounds::new(point(x, p.y + 3. * unit), size(3. * unit, (height - 6. * unit).max(unit))), color));
++                    }
++                    for (color, y) in [(mark.deleted_before, p.y), (mark.deleted_after, p.y + height)] {
++                        if let Some(color) = color {
++                            let mut path = gpui::PathBuilder::fill();
++                            path.move_to(point(x, y - 3. * unit));
++                            path.line_to(point(x + 6. * unit, y));
++                            path.line_to(point(x, y + 3. * unit));
++                            path.close();
++                            if let Ok(path) = path.build() { window.paint_path(path, color); }
++                        }
++                    }
++                }
+                 for line in lines {
+                     _ = line.paint(p, line_height, TextAlign::Left, None, window, cx);
+                     offset_y += line_height;
+diff --git a/vendor/gpui-kit/crates/base/src/input/base/kind.rs b/vendor/gpui-kit/crates/base/src/input/base/kind.rs
+index f3c7eff..61a92f2 100644
+--- a/vendor/gpui-kit/crates/base/src/input/base/kind.rs
++++ b/vendor/gpui-kit/crates/base/src/input/base/kind.rs
+@@ -78,6 +78,8 @@ impl MultiLineMode for EditorMode {}
+ /// during an edit. Adding a field an editor renders belongs here and leaves
+ /// the engine's callbacks alone.
+ pub trait InputExtras: Default + 'static {
++    fn gutter_marker(&self, _row: usize) -> Option<super::EditorGutterMarker> { None }
++
+     /// Decoration ranges to paint, innermost collection first.
+     fn decoration_layers(&self) -> Vec<&[TextDecoration]> {
+         Vec::new()
+@@ -351,6 +353,7 @@ impl InputModeKind for TextareaMode {
+ 
+ /// What a code editor adds on top of multi-line text: language features.
+ pub struct EditorExtras {
++    pub(crate) gutter_marks: std::collections::BTreeMap<usize, super::EditorGutterMarker>,
+     pub(crate) lsp: Lsp,
+     pub(crate) decorations: DecorationCollections,
+     pub(crate) range_decorations: DecorationCollections<RangeDecoration>,
+@@ -364,6 +367,7 @@ pub struct EditorExtras {
+ impl Default for EditorExtras {
+     fn default() -> Self {
+         Self {
++            gutter_marks: Default::default(),
+             lsp: Lsp::default(),
+             decorations: DecorationCollections::default(),
+             range_decorations: DecorationCollections::default(),
+diff --git a/vendor/gpui-kit/crates/base/src/input/editor/mod.rs b/vendor/gpui-kit/crates/base/src/input/editor/mod.rs
+index 6850df7..e7a228c 100644
+--- a/vendor/gpui-kit/crates/base/src/input/editor/mod.rs
++++ b/vendor/gpui-kit/crates/base/src/input/editor/mod.rs
+@@ -10,6 +10,23 @@ use super::{EditorMode, InputBaseState, InputModeKind};
+ /// exposes them.
+ pub type EditorState = InputBaseState<EditorMode>;
+ 
++/// A mark tied to a zero-based buffer line, independent of scrolling or folding.
++#[derive(Clone, Copy, Debug, Default, PartialEq)]
++pub struct EditorGutterMarker {
++    pub color: Option<gpui::Hsla>,
++    pub deleted_before: Option<gpui::Hsla>,
++    pub deleted_after: Option<gpui::Hsla>,
++}
++
++impl EditorState {
++    pub fn set_gutter_marks(&mut self, marks: std::collections::BTreeMap<usize, EditorGutterMarker>, cx: &mut gpui::Context<Self>) {
++        if self.extras.gutter_marks != marks {
++            self.extras.gutter_marks = marks;
++            cx.notify();
++        }
++    }
++}
++
+ impl InputModeKind for EditorMode {
+     const MULTI_LINE: bool = true;
+     const CODE_EDITOR: bool = true;
+@@ -235,6 +252,10 @@ impl RenderOnce for Editor {
+ 
+ /// What a code editor exposes to the renderer. See [`crate::input::InputExtras`].
+ impl crate::input::InputExtras for super::EditorExtras {
++    fn gutter_marker(&self, row: usize) -> Option<EditorGutterMarker> {
++        self.gutter_marks.get(&row).copied()
++    }
++
+     fn decoration_layers(&self) -> Vec<&[super::TextDecoration]> {
+         self.decorations.iter().collect()
+     }
+diff --git a/vendor/gpui-kit/crates/base/src/input/mod.rs b/vendor/gpui-kit/crates/base/src/input/mod.rs
+index 13f6410..3b62b14 100644
+--- a/vendor/gpui-kit/crates/base/src/input/mod.rs
++++ b/vendor/gpui-kit/crates/base/src/input/mod.rs
+@@ -91,7 +91,7 @@ pub use diagnostics::{
+     DiagnosticSummary, DiagnosticTag, RelatedInformation,
+ };
+ pub use display_map::{BufferPoint, DisplayMap, DisplayPoint, FoldRange, WrappingIndent};
+-pub use editor::{Editor, EditorState};
++pub use editor::{Editor, EditorGutterMarker, EditorState};
+ pub use highlighting::{
+     DiagnosticColors, FoldIconRenderer, HighlightStyleResolver, InputEditorStyle, InputHighlighter,
+     InputHighlighterFactory, SharedHighlightStyleResolver, SyntaxContext, SyntaxContextProvider,
+diff --git a/vendor/gpui-kit/crates/shell/src/engine/quickjs/mod.rs b/vendor/gpui-kit/crates/shell/src/engine/quickjs/mod.rs
+index 25d7dd9..c32d63f 100644
+--- a/vendor/gpui-kit/crates/shell/src/engine/quickjs/mod.rs
++++ b/vendor/gpui-kit/crates/shell/src/engine/quickjs/mod.rs
+@@ -7157,6 +7157,7 @@ globalThis.__gpui = (() => {
+         const handle = __editor_state_new(JSON.stringify(options));
+         return {
+           __handle: handle,
++          set_gutter_marks: (marks) => __editor_text_call(handle, "set_gutter_marks", [JSON.stringify(marks)]),
+           selected_range: () => __editor_text_call(handle, "selected_range", []),
+           set_selected_range: (range) => __editor_text_call(handle, "set_selected_range", [range]),
+           replace: (text) => __editor_text_call(handle, "replace", [String(text)]),
+diff --git a/vendor/gpui-kit/crates/shell/src/input_tokens.rs b/vendor/gpui-kit/crates/shell/src/input_tokens.rs
+index b5e178e..d7e3915 100644
+--- a/vendor/gpui-kit/crates/shell/src/input_tokens.rs
++++ b/vendor/gpui-kit/crates/shell/src/input_tokens.rs
+@@ -312,7 +312,26 @@ pub(crate) const EDITOR_METHODS: &[(&str, bool)] = &[
+     ("selected_range", true),
+     ("set_selected_range", false),
+     ("replace", false),
++    ("set_gutter_marks", false),
+ ];
++#[derive(serde::Deserialize)]
++#[serde(deny_unknown_fields)]
++struct ScriptGutterMarker {
++    line: usize,
++    color: Option<String>,
++    deleted_before: Option<String>,
++    deleted_after: Option<String>,
++}
++fn gutter_marks(json: &str) -> Result<std::collections::BTreeMap<usize, gpui_base::input::EditorGutterMarker>> {
++    let marks: Vec<ScriptGutterMarker> = serde_json::from_str(json)?;
++    let color = |value: Option<String>| -> Result<Option<gpui::Hsla>> {
++        value.map(|v| crate::value::Bridged::Str(v).as_color().map_err(Into::into)).transpose()
++    };
++    marks.into_iter().map(|m| {
++        let row = m.line.checked_sub(1).ok_or_else(|| anyhow!("gutter line must be positive"))?;
++        Ok((row, gpui_base::input::EditorGutterMarker { color: color(m.color)?, deleted_before: color(m.deleted_before)?, deleted_after: color(m.deleted_after)? }))
++    }).collect()
++}
+ pub(crate) fn invoke_editor(
+     entity: &Entity<EditorState>,
+     name: &str,
+@@ -335,6 +354,11 @@ pub(crate) fn invoke_editor(
+             entity.update(cx, |state, cx| state.replace(text, window, cx));
+             Ok(Data::Null)
+         }
++        ("set_gutter_marks", [value]) => {
++            let marks = gutter_marks(string(value)?)?;
++            entity.update(cx, |state, cx| state.set_gutter_marks(marks, cx));
++            Ok(Data::Null)
++        }
+         _ => bail!("invalid arguments for editor state operation `{name}`"),
+     }
+ }
+diff --git a/vendor/gpui-kit/crates/shell/src/typings.rs b/vendor/gpui-kit/crates/shell/src/typings.rs
+index 3c589ce..7eac6dd 100644
+--- a/vendor/gpui-kit/crates/shell/src/typings.rs
++++ b/vendor/gpui-kit/crates/shell/src/typings.rs
+@@ -3201,6 +3201,8 @@ const BASE: &str = r#"  /** A row. */
+ 
+   // HERDR: built-in source editing and read-only code viewing.
+   export interface EditorState {
++    /** Marks follow buffer lines through scrolling and folding. Lines are one-based. */
++    set_gutter_marks(marks: Array<{ line: number; color?: string; deleted_before?: string; deleted_after?: string }>): void;
+     value(): string;
+     /** Programmatic replacement works even in readonly mode. */
+     set_value(value: string): void;

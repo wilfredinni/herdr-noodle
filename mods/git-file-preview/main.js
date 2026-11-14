@@ -2,14 +2,16 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Button, Scrollbar, v_virtual_list, TextView, Popover, VirtualListScrollHandle } from "gpui-base";
 import { shared, exec, readTextFile, watchFolder, theme, settings, props, focused, panes, setShared, run, appHome } from "herdr";
 import { Review } from "./review.js";
-import { Documents } from "./documents.js";
 import { readDiff, readFile, readMarkdown, isMarkdown, splitRows, git } from "./content.js";
 
 export default class FilePreview extends View {
   init(_props, cx) {
     this.selectionKey = props()?.selectionKey || _props?.selectionKey || "git-file-preview.unselected"; this.rows = []; this.mode = "diff"; this.version = 0;
     this.layout = "unified";
-    if (typeof Documents !== "undefined") { this.documents = new Documents(this, cx); this.review = new Review(this); this.scroll = VirtualListScrollHandle.new(); }
+    if (typeof Review !== "undefined") { this.review = new Review(this); this.scroll = VirtualListScrollHandle.new(); }
+    const owners = shared("noodle.documents") || {};
+    if (Object.values(owners).some(doc => doc.key === this.selectionKey))
+      setShared("noodle.documents", Object.fromEntries(Object.entries(owners).filter(([_id, doc]) => doc.key !== this.selectionKey)));
     this.refresh(cx);
     cx.timer.every(10000, cx => {
       if (this.selection && !this.selection.hash) {
@@ -129,7 +131,7 @@ export default class FilePreview extends View {
     finally { if (version === this.version) { this.sourceLoading = false; if (changed) cx.notify(); } }
   }
 
-  async close() { this.watched = null; await this.documents?.close(); }
+  close() { this.watched = null; }
 
   async loadAsset(cx) {
     const version = this.version;
@@ -141,6 +143,18 @@ export default class FilePreview extends View {
   closePreview() {
     const tab = focused()?.tab, pane = panes().find(p => p.tab === tab && p.mod === "git-file-preview");
     if (pane) run("pane.close", { pane: pane.pane });
+  }
+
+  editWorkingFile() {
+    const s = this.selection;
+    if (!s?.file || s.on) return;
+    const all = panes(), tab = focused()?.tab;
+    const preview = all.find(p => p.tab === tab && p.mod === "git-file-preview");
+    if (!preview) return;
+    const selectionKey = `file-editor.${tab}`, editor = all.find(p => p.tab === tab && p.mod === "file-editor");
+    setShared(selectionKey, { kind: "file", root: s.root, on: null, gitRoot: s.gitRoot, sourcePane: s.sourcePane, file: { path: s.file.path }, hash: null });
+    if (editor) run("pane.focus", { pane: editor.pane });
+    else run("pane.split", { pane: preview.pane, direction: "right", mod: "file-editor", props: { selectionKey } });
   }
 
   openFile(file, _commit, cx, options = {}) {
@@ -227,7 +241,7 @@ export default class FilePreview extends View {
       .when(!source, el => el.child(this.number(row.oldNumber, t)))
       .child(this.number(source ? number : row.newNumber, t))
       .when(source, el => el.child(div().w(8).h(24).flex_none().relative()
-        .when(Boolean(change), e => e.child(div().absolute().left(1).top(4).w(3).h(16).bg(change === "added" ? t.ansi2 : t.ansi3)))
+        .when(Boolean(change), e => e.child(div().absolute().left(1).top(0).w(3).h(24).bg(change === "added" ? t.ansi2 : t.ansi3)))
         .when(Boolean(deletedBefore), e => e.child(svg("mods/git-file-preview/deleted.svg").w(6).h(5).absolute().left(0).top(0).text_color(t.ansi1)))
         .when(Boolean(deletedAfter), e => e.child(svg("mods/git-file-preview/deleted.svg").w(6).h(5).absolute().left(0).bottom(0).text_color(t.ansi1)))))
       .when(!source, el => el.child(div().w(22).flex_none().text_center().text_color(kind === "+" ? t.ansi2 : kind === "-" ? t.ansi1 : t.dim).child(kind === "+" || kind === "-" ? kind : "")))
@@ -348,7 +362,9 @@ export default class FilePreview extends View {
         .when(Boolean(file), el => el
           .child(this.iconButton("preview-copy-path", "Copy file path", "mods/git-file-preview/copy.svg", cx => cx.write_to_clipboard(`${s.root.replace(/[\\/]$/, "")}/${file.path}`), t))
           .child(this.fileMenu(t, cx))
-          .when(Boolean(this.documents && !s.on), el => el.child(Button.new("edit-working-file").h(28).px(8).rounded(5).text_size(12).child(s.hash || s.diffMode === "staged" ? "Edit working file" : "Edit").on_click((_e, cx) => this.documents.edit(cx))))))
+          .when(!s.on, el => el.child(Button.new("edit-working-file").h(28).px(10).flex_none().rounded(5).border_1().border_color(t.border).bg(t.raised).text_color(t.foreground).text_size(12)
+            .accessibility_label("Edit working file").tooltip("Open working file in the file editor").hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent))
+            .child(s.hash || s.diffMode === "staged" ? "Edit working file" : "Edit").on_click(() => this.editWorkingFile())))))
       .when(Boolean(s?.commit), el => el.child(this.commitCard(t, cx)))
       .when(Boolean(file && status === "U" && !s.hash), el => el.child(this.conflictBanner(t, cx)))
       .when(Boolean(this.actionError), el => el.child(div().px(16).py(8).text_size(12).text_color(t.ansi1).child(this.actionError)))
@@ -361,8 +377,7 @@ export default class FilePreview extends View {
         .when(this.mode === "diff", el => el.child(this.segments("diff-layout", [["unified", "Unified"], ["split", "Split"]], this.layout, (layout, cx) => { this.layout = layout; cx.notify(); }, t)))))
       .when(this.mode === "asset", el => el.child(div().flex_1().min_h(0).id("asset-preview").overflow_scrollbar().p(20).child(this.asset ? image(this.asset.path).w(Math.min(720, this.asset.width)).h(Math.min(720, this.asset.width) * this.asset.height / this.asset.width) : div().text_color(t.muted).child(this.error || "Loading image…"))))
       .when(this.mode === "review", el => el.child(this.review.render(t, cx)))
-      .when(this.mode === "edit", el => el.child(this.documents.render(t, cx)))
-      .when(this.mode !== "markdown" && this.mode !== "edit" && this.mode !== "review" && this.mode !== "asset", el => el
+      .when(this.mode !== "markdown" && this.mode !== "review" && this.mode !== "asset", el => el
         .when(split && Boolean(file), el => el.child(h_flex().h(28).flex_none().border_b(1).border_color(t.border).text_size(11).text_color(t.muted)
           .child(div().flex_1().px(14).border_r(1).border_color(t.border).child(s.hash ? "Parent · before" : s.diffMode === "staged" || s.diffMode === "all" ? "HEAD · before" : "Index · before"))
           .child(div().flex_1().px(14).child(s.hash ? "Commit · after" : s.diffMode === "staged" ? "Index · after" : "Working tree · after"))))
@@ -387,6 +402,6 @@ export default class FilePreview extends View {
         .when(this.markdown?.truncated, el => el.child(div().px(20).py(8).text_size(11).text_color(t.muted).child("Markdown preview limited to the first 200,000 characters"))))
       .when(Boolean(file), el => el.child(h_flex().h(28).flex_none().px(16).gap(14).items_center().border_t(1).border_color(t.border).text_size(11).text_color(t.muted)
         .child(div().child(language)).when(Boolean((this.mode === "markdown" ? this.markdown : result)?.lineEnding), el => el.child(div().child((this.mode === "markdown" ? this.markdown : result).lineEnding)))
-        .child(div().flex_1()).child(div().child(this.mode === "edit" ? "Working file" : s.hash ? "Commit preview" : "Read-only preview"))));
+        .child(div().flex_1()).child(div().child(s.hash ? "Commit preview" : "Read-only preview"))));
   }
 }

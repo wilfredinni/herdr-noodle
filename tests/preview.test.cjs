@@ -57,6 +57,28 @@ test('unified line numbers and split pairs preserve hunk positions and unequal r
   assert.equal(pairs[5].before.kind, '@'); assert.equal(pairs[6].after.newNumber, 40);
 });
 
+test('Edit opens or focuses the separate editor and keeps the preview open', async t => {
+  const root = fixture(t), hash = git(root, 'rev-parse', 'HEAD').trim();
+  for (const existing of [false, true]) {
+    const h = harness({ root, on: null, sourcePane: 'terminal', hash, diffMode: 'staged', file: { path: 'a.md', status: 'D' } });
+    await h.flush();
+    const commands = [];
+    h.c.panes = () => [{ pane: 'preview', tab: 'tab', mod: 'git-file-preview' }, ...(existing ? [{ pane: 'editor', tab: 'tab', mod: 'file-editor' }] : [])];
+    h.c.run = (name, args) => commands.push({ name, args });
+    const button = find(h.view.render(h.cx), 'edit-working-file');
+    assert.equal(button.attrs.bg[0], 'raised'); assert.ok(button.attrs.border_1);
+    button.handlers.click({}, h.cx);
+    const selection = h.state.get('file-editor.tab');
+    assert.equal(selection.file.path, 'a.md'); assert.equal(selection.hash, null);
+    assert.equal(selection.diffMode, undefined); assert.equal(selection.file.status, undefined);
+    assert.equal(commands[0].name, existing ? 'pane.focus' : 'pane.split');
+    assert.equal(commands[0].args[existing ? 'pane' : 'mod'], existing ? 'editor' : 'file-editor');
+    assert.equal(commands.length, 1); assert.ok(commands.every(command => command.name !== 'pane.close'));
+    assert.equal(h.state.get('selection').hash, hash);
+    assert.equal(h.view.documents, undefined);
+  }
+});
+
 test('Source and Markdown read index or selected commit rather than current working content', async t => {
   const root = fixture(t), hash = git(root, 'rev-parse', 'HEAD').trim();
   fs.writeFileSync(path.join(root, 'a.md'), 'staged\r\n'); git(root, 'add', 'a.md'); fs.writeFileSync(path.join(root, 'a.md'), 'working\n');

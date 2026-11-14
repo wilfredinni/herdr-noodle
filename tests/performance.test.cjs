@@ -122,7 +122,7 @@ test('preview filters unrelated events, defers hidden tabs, and refreshes on ret
   const h = harness(), c = h.context, watchers = [];
   let reads = 0;
   const selection = { kind: 'file', root: '/repo', on: null, sourcePane: 'p', file: { path: 'README.md' } };
-  c.shared = () => selection;
+  c.shared = key => key === 'noodle.documents' ? null : selection;
   c.readFile = async () => { reads++; return { rows: [{ text: 'hello' }] }; };
   c.isMarkdown = () => false;
   c.watchFolder = () => new Promise(resolve => watchers.push(resolve));

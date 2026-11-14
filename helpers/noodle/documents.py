@@ -2,6 +2,8 @@
 from pathlib import Path
 import os
 import time
+import re
+import subprocess
 from storage import atomic, fingerprint, identity, read_json, resolve, save_text, text, write_json
 
 
@@ -19,6 +21,25 @@ def record(home, doc_id):
     if not meta:
         raise ValueError('This document is no longer available')
     return p, meta
+
+
+def gutter(p, meta):
+    root, file = resolve(meta)
+    draft = text(p['input'])
+    result = {'hunks': '', 'lineCount': draft.count('\n') + 1, 'revision': meta['revision']}
+    command = ['git', '--literal-pathspecs', '--no-optional-locks', '-c', 'core.fsmonitor=false']
+    top = subprocess.run([*command, 'rev-parse', '--show-toplevel'], cwd=root, capture_output=True, timeout=20)
+    if top.returncode:
+        return result
+    path = file.relative_to(Path(os.fsdecode(top.stdout).rstrip('\n')).resolve()).as_posix()
+    base = subprocess.run([*command, 'show', f'HEAD:{path}'], cwd=root, capture_output=True, timeout=20)
+    baseline = p['input'].parent / 'git-base'
+    atomic(baseline, base.stdout if base.returncode == 0 else b'')
+    diff = subprocess.run([*command, 'diff', '--no-index', '--no-ext-diff', '--no-textconv', '--text', '--unified=0', '--', str(baseline), str(p['input'])], cwd=root, capture_output=True, timeout=20)
+    if diff.returncode not in [0, 1]:
+        raise ValueError(diff.stderr.decode('utf-8', 'replace').strip() or 'Cannot read gutter changes')
+    result['hunks'] = '\n'.join(re.findall(r'^@@ .*? @@.*$', diff.stdout.decode('utf-8', 'replace'), re.M))
+    return result
 
 
 def dirty_documents(home, path):
@@ -62,6 +83,8 @@ def handle(action, request, home):
         return {**meta, 'root': str(root), 'path': str(path.relative_to(root)), 'base': base, 'draft': draft, 'disk': disk,
                 'conflict': disk != base, 'inputPath': str(p['input']), 'inputValue': draft, 'snapshot': fingerprint(path)}
     p, meta = record(home, request['id'])
+    if action == 'document_gutter':
+        return gutter(p, meta)
     if action == 'document_note_prepare':
         atomic(p['note-input'], b'')
         return {'path': str(p['note-input']), 'notes': read_json(p['notes.json'], [])}
@@ -98,7 +121,7 @@ def handle(action, request, home):
         atomic(p['base'], disk.encode())
         meta.update(dirty=text(p['draft']) != disk, revision=meta['revision'] + 1)
         write_json(p['meta.json'], meta)
-        return {'base': disk}
+        return {'base': disk, 'revision': meta['revision']}
     raise ValueError('Unknown document operation')
 
 

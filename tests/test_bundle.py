@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BundleTests(unittest.TestCase):
-    def test_bundle_has_the_six_mods_and_documentation(self):
+    def test_bundle_has_the_declared_mods_and_documentation(self):
         manifest = json.loads((ROOT/'manifest.json').read_text())
         self.assertEqual(set(manifest['mods']), {p.name for p in (ROOT/'mods').iterdir()})
         for name in ['README.md', 'RECIPE.md', 'NOTICE.md', 'preview.png', 'layouts/noodle.png']:

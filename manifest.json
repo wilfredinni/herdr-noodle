@@ -6,6 +6,7 @@
     "files-browser",
     "changes-graph",
     "git-file-preview",
+    "file-editor",
     "git-error",
     "workspace-usage"
   ],
