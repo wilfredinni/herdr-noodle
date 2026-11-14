@@ -1,11 +1,11 @@
 import { View, div, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, Tabs, Tab, Button, Checkbox, Popover } from "gpui-base";
-import { spaces, panes, focused, exec, watchFolder, theme, settings, run, shared, setShared, appHome, readTextFile } from "herdr";
+import { spaces, panes, focused, exec, watchFolder, theme, settings, run, shared, setShared, appHome, readTextFile, props } from "herdr";
 import { GRAPH_ARGS, HISTORY_ARGS, GRAPH_LIMIT, GRAPH_ROW_HEIGHT, graphRows, COMMIT_FORMAT, commitDetail, refLabels, shortAge } from "./graph.js";
 import { GitToolbar, worktreeRows } from "./gitToolbar.js";
 import { showGitError } from "./gitError.js";
 import { FileActions } from "./fileActions.js";
-import { CommitGenerator } from "./commitGenerator.js";
+import { CommitGenerator, CommitInstructions } from "./commitGenerator.js";
 import { Repositories } from "./repositories.js";
 import { StashPanel } from "./stashPanel.js";
 import { git, stage, trash, addIgnore } from "./fileOps.js";
@@ -38,6 +38,8 @@ function upstreamState(status) {
 }
 export default class Changes extends View {
   init(_props, cx) {
+    const options = typeof props === "function" ? props() : _props;
+    if (options?.commitInstructions) { this.commitInstructions = new CommitInstructions(options); return; }
     this.drafts = new Map(); this.repositories = new Repositories(this, workspace, cx);
     this.view = "changes"; this.graph = []; this.graphError = null; this.selectedCommit = null; this.detail = null; this.detailError = null;
     this.history = []; this.historyError = null; this.historyLoading = false;
@@ -531,6 +533,7 @@ export default class Changes extends View {
   }
 
   render(cx) {
+    if (this.commitInstructions) return this.commitInstructions.render(theme());
     this.repositories.refresh(cx);
     const current = key() === this.context;
     if (!current) this.refresh(cx);
@@ -588,6 +591,8 @@ export default class Changes extends View {
           .child(div().id("commit-message").w_full().min_w(0).cursor_text().on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .child(Textarea.new(this.input).w_full().h(54).text_size(12).line_height("18px").text_color(t.foreground).accessibility_label("Commit message")))
           .child(h_flex().w_full().items_center().justify_end().gap(8)
+            .child(this.generator.instructionsButton(t, current))
+            .child(div().flex_1())
             .child(Button.new("commit").h(28).px(10).flex().items_center().rounded(5).border_1().border_color(t.border).bg(t.raised).text_color(hasMessage ? t.foreground : t.dim).text_size(12).font_normal().disabled(!enabled)
               .accessibility_label(selectedCount ? `Commit ${selectedCount} staged files` : "Commit all changes").tooltip(selectedCount ? "Commit staged content only" : "Stage and commit all reviewed changes")
               .hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent)).on_click((_e, cx) => this.commit(cx))

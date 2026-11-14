@@ -1,8 +1,8 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs'),vm=require('node:vm');
 function element(id){const n={id,nodes:[],attrs:{},handlers:{}};let p;p=new Proxy(n,{get(n,k){if(k==='id'&&n.id===undefined)return v=>(n.id=v,p);if(k in n)return n[k];if(['child','trigger','content'].includes(k))return v=>(n.nodes.push(v),p);if(k==='children')return v=>(n.nodes.push(...v),p);if(k==='when')return(c,f)=>(c&&f(p),p);return(...a)=>{n.attrs[k]=a;if(k.startsWith('on_'))n.handlers[k.slice(3)]=a.at(-1);return p;}}});return p;}
-function input(){let v='';return{value:()=>v,set_value:x=>v=x,focus(){},on(){}}}
+function input(options){let v=options?.value||'';return{value:()=>v,set_value:x=>v=x,focus(){},on(){}}}
 const find=(n,id)=>n?.id===id?n:n?.nodes?.map(x=>find(x,id)).find(Boolean);const texts=n=>typeof n==='string'?n:(n?.nodes??[]).map(texts).join(' ');
-function harness(){const pending=[],errors=[],notices=[],saved={};let key='repo',response={subject:'Update selected files'};const owner={root:'/repo',on:null,context:key,files:[{path:'a',staged:true},{path:'b',staged:false}],message:'',messageRevision:0,input:input(),refresh(){}};const cx={focus_handle:()=>({focus(){}}),notify(){},stop_propagation(){},spawn(f){pending.push(f(cx));}};owner.gitToolbar={snapshot:()=>({root:owner.root,on:owner.on,context:owner.context,head:'hash',branch:'main'}),enabled:()=>!owner.busy};const c={div:element,svg:src=>{const el=element();el.attrs.src=[src];return el},image:element,h_flex:element,v_flex:element,Button:{new:element},Popover:{new:element},InputState:{new:input},Input:{new:element},ScrollHandle:{new:()=>({scroll_to_item(){}})},shared:k=>saved[k],setShared:(k,v)=>saved[k]=v,notify:v=>notices.push(v),showGitError:(l,e)=>errors.push(e.message)};vm.createContext(c);vm.runInContext(fs.readFileSync(__dirname+'/../mods/changes-graph/commitGenerator.js','utf8').replace(/^import .*;\n/gm,'').replace(/export /g,'')+'\nObject.assign(globalThis,{CommitGenerator,selectedPaths,sameDraft})',c);const gen=new c.CommitGenerator(owner,()=>key,cx);gen.machine=null;gen.connections=[{id:'codex',name:'Codex',icon:'icon',models:[{id:'model1',name:'Model One'},{id:'model2',name:'Model Two'}]}];gen.selected={connection:'codex',model:'model1'};const requests=[];gen.call=async req=>{requests.push(req);return typeof response==='function'?response(req):response};return{c,gen,owner,cx,requests,errors,notices,saved,setKey:v=>key=v,setResponse:v=>response=v,async flush(){while(pending.length)await Promise.all(pending.splice(0))}}}
+function harness(){const pending=[],errors=[],notices=[],saved={},overlays=[],closed=[];let key='repo',response={subject:'Update selected files'};const owner={root:'/repo',on:null,context:key,files:[{path:'a',staged:true},{path:'b',staged:false}],message:'',messageRevision:0,input:input(),refresh(){}};const cx={focus_handle:()=>({focus(){}}),notify(){},stop_propagation(){},spawn(f){pending.push(f(cx));}};owner.gitToolbar={snapshot:()=>({root:owner.root,on:owner.on,context:owner.context,head:'hash',branch:'main'}),enabled:()=>!owner.busy};const c={div:element,svg:src=>{const el=element();el.attrs.src=[src];return el},image:element,h_flex:element,v_flex:element,Button:{new:element},Popover:{new:element},InputState:{new:input},Input:{new:element},TextareaState:{new:input},Textarea:{new:element},openOverlay:options=>overlays.push(options),closeOverlay:id=>closed.push(id),ScrollHandle:{new:()=>({scroll_to_item(){}})},shared:k=>saved[k],setShared:(k,v)=>saved[k]=v,notify:v=>notices.push(v),showGitError:(l,e)=>errors.push(e.message)};vm.createContext(c);vm.runInContext(fs.readFileSync(__dirname+'/../mods/changes-graph/commitGenerator.js','utf8').replace(/^import .*;\n/gm,'').replace(/export /g,'')+'\nObject.assign(globalThis,{CommitGenerator,CommitInstructions,instructionsKey,selectedPaths,sameDraft})',c);const gen=new c.CommitGenerator(owner,()=>key,cx);gen.machine=null;gen.connections=[{id:'codex',name:'Codex',icon:'icon',models:[{id:'model1',name:'Model One'},{id:'model2',name:'Model Two'}]}];gen.selected={connection:'codex',model:'model1'};const requests=[];gen.call=async req=>{requests.push(req);return typeof response==='function'?response(req):response};return{c,gen,owner,cx,requests,errors,notices,saved,overlays,closed,setKey:v=>key=v,setResponse:v=>response=v,async flush(){while(pending.length)await Promise.all(pending.splice(0))}}}
 const t=new Proxy({},{get:(_,k)=>k});
 test('subset request includes exactly checked files and never commits',async()=>{const h=harness();h.gen.generate(h.cx);await h.flush();assert.equal(JSON.stringify(h.requests[0].selected),'["a"]');assert.equal(h.owner.message,'Update selected files');assert.equal(h.owner.input.value(),h.owner.message);assert.equal(h.requests[0].action,'generate');assert.equal(h.owner.busy,false)});
 test('none selected remains enabled and requests all semantics',async()=>{const h=harness();h.owner.files.forEach(f=>f.staged=false);assert.equal(find(h.gen.render(t,h.cx),'generate-commit-message').attrs.disabled[0],false);h.gen.generate(h.cx);await h.flush();assert.equal(JSON.stringify(h.requests[0].selected),'[]')});
@@ -15,6 +15,36 @@ test('connection leads to model selection, persistence and matching icon',()=>{c
 test('working label remains Generate with native spinner',()=>{const h=harness();h.gen.running=true;const tree=h.gen.render(t,h.cx);assert.match(texts(tree),/Generate/);assert.doesNotMatch(texts(tree),/Working|Generating/);assert.equal(find(tree,'generate-commit-message').attrs.disabled[0],true)});
 test('stale model choice disables generation instead of falling back',()=>{const h=harness();h.gen.selected.model='removed';assert.equal(find(h.gen.render(t,h.cx),'generate-commit-message').attrs.disabled[0],true)});
 test('generation never sets the Git toolbar activity state',async()=>{const h=harness();h.gen.generate(h.cx);assert.equal(h.gen.running,true);assert.equal(h.owner.busy,true);assert.equal(h.owner.gitToolbar.running,undefined);await h.flush();assert.equal(h.owner.gitToolbar.running,undefined);assert.equal(h.gen.running,false)});
+
+test('instructions icon opens a modal for the current repository even without changes',()=>{
+ const h=harness();h.owner.files=[];
+ const button=h.gen.instructionsButton(t,true);assert.equal(button.attrs.disabled[0],false);assert.equal(button.attrs.tooltip[0],'Commit instructions');
+ button.handlers.click();assert.equal(h.overlays[0].props.root,'/repo');assert.equal(h.overlays[0].props.on,null);assert.equal(h.overlays[0].props.commitInstructions,true);assert.equal(h.overlays[0].kind,'dialog');
+ assert.equal(h.gen.instructionsButton(t,false).attrs.disabled[0],true);
+});
+
+test('commit instructions persist per repository and machine, and closing does not save',()=>{
+ const h=harness(),options={root:'/repo',on:null,overlay:'instructions'};
+ let dialog=new h.c.CommitInstructions(options);dialog.input.set_value('  Use Conventional Commits.\nWrite in Spanish.  ');dialog.save(h.cx);
+ const key=h.c.instructionsKey('/repo',null);assert.equal(h.saved[key],'Use Conventional Commits.\nWrite in Spanish.');assert.deepEqual(h.closed,['instructions']);
+ dialog=new h.c.CommitInstructions(options);assert.equal(dialog.input.value(),h.saved[key]);dialog.input.set_value('Unsaved changes');find(dialog.render(t),'close-commit-instructions').handlers.click();
+ assert.equal(new h.c.CommitInstructions(options).input.value(),h.saved[key]);
+ for(const other of [{root:'/another',on:null},{root:'/repo',on:'server'}])assert.equal(new h.c.CommitInstructions(other).input.value(),'');
+ dialog=new h.c.CommitInstructions(options);dialog.input.set_value('');dialog.save(h.cx);assert.equal(h.saved[key],'');
+});
+
+test('invalid commit instructions keep the modal open and preserve saved instructions',()=>{
+ const h=harness(),key=h.c.instructionsKey('/repo',null);h.saved[key]='Keep';
+ const dialog=new h.c.CommitInstructions({root:'/repo',on:null,overlay:'instructions'});
+ for(const value of ['x'.repeat(8001),'bad\0text']){dialog.input.set_value(value);dialog.save(h.cx);assert.ok(dialog.error);assert.equal(h.closed.length,0);assert.equal(h.saved[key],'Keep');}
+});
+
+test('generation uses saved instructions and rejects a result if they change mid-request',async()=>{
+ const h=harness(),key=h.c.instructionsKey('/repo',null);h.saved[key]='Use Conventional Commits';
+ h.gen.generate(h.cx);assert.equal(h.requests[0].instructions,'Use Conventional Commits');await h.flush();assert.equal(h.owner.message,'Update selected files');
+ h.owner.message='Keep my draft';h.gen.generate(h.cx);h.saved[key]='Write in Spanish';await h.flush();assert.equal(h.owner.message,'Keep my draft');assert.equal(h.notices.length,1);
+ h.gen.generate(h.cx);await h.flush();assert.equal(h.requests.at(-1).instructions,'Write in Spanish');
+});
 
 function activityHarness(){
  const h=harness();

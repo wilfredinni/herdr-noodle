@@ -55,6 +55,8 @@ Checkboxes represent the real Git index, not a separate selection. With checked 
 
 Generate follows the same scope: checked files use their staged changes; no checked files includes all working changes. It only fills the text area. It does not stage files or commit. A changed draft, repository, branch, or selection prevents an obsolete result from replacing your current work. Diffs include one context line per hunk and allow up to 1,200,000 UTF-8 bytes. OpenCode's encoded request body also allows 1,200,000 bytes and goes directly to its authenticated local service, avoiding command-line argument limits. Errors report the actual size; stage a smaller selection when it exceeds the limit. Source is never silently truncated.
 
+The **Commit instructions** icon before Commit and Generate opens a text area for your preferred style, language and conventions. Save applies the instructions to future generations; the × closes without saving. Instructions are stored in Herdr's local state per repository and machine, and are sent with the selected diff to the chosen connection. Leave them empty to use the default English imperative style. Generated messages remain single-line commit subjects.
+
 Only Generate spins during generation. Fetch spins for actions from Fetch and its menu, including Pull and Push. Selecting files and switching branches leave those indicators still.
 
 ## Connections and access

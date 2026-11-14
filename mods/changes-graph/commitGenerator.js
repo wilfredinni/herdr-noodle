@@ -1,12 +1,48 @@
 import { div, svg, image } from "gpui-kit";
-import { h_flex, v_flex, Button, Popover, InputState, Input, ScrollHandle } from "gpui-base";
-import { exec, appHome, readTextFile, shared, setShared, notify } from "herdr";
+import { h_flex, v_flex, Button, Popover, InputState, Input, ScrollHandle, TextareaState, Textarea } from "gpui-base";
+import { exec, appHome, readTextFile, shared, setShared, notify, openOverlay, closeOverlay } from "herdr";
 import { showGitError } from "./gitError.js";
 
 export function selectedPaths(files) { return files.filter(f => f.staged).map(f => f.path).sort(); }
+export function instructionsKey(root, on) { return `ai.commit.instructions.${JSON.stringify([on ?? null, root])}`; }
 export function sameDraft(owner, snapshot, key) {
   return key() === snapshot.context && owner.context === snapshot.context && owner.root === snapshot.root && owner.on === snapshot.on
-    && owner.messageRevision === snapshot.revision && JSON.stringify(selectedPaths(owner.files)) === JSON.stringify(snapshot.selected);
+    && owner.messageRevision === snapshot.revision && JSON.stringify(selectedPaths(owner.files)) === JSON.stringify(snapshot.selected)
+    && (shared(instructionsKey(snapshot.root, snapshot.on)) || "") === snapshot.instructions;
+}
+
+export class CommitInstructions {
+  constructor(options) {
+    this.options = options; this.key = instructionsKey(options.root, options.on);
+    const saved = shared(this.key);
+    this.input = TextareaState.new({ value: typeof saved === "string" ? saved : "", placeholder: "e.g. Use Conventional Commits. Write in Spanish." });
+    this.input.on("change", (_e, cx) => { this.error = null; cx.notify(); });
+    this.input.focus();
+  }
+
+  save(cx) {
+    const value = this.input.value().trim();
+    if (value.length > 8000 || value.includes("\0")) { this.error = "Use up to 8,000 characters without null characters."; cx.notify(); return; }
+    setShared(this.key, value); closeOverlay(this.options.overlay);
+  }
+
+  render(t) {
+    return v_flex().id("commit-instructions-dialog").size_full().min_h(0).p(20).gap(14).rounded(10).border_1().border_color(t.border).bg(t.popover).text_color(t.foreground)
+      .child(h_flex().items_center().gap(12)
+        .child(div().flex_1().text_size(15).font_semibold().child("Commit instructions"))
+        .child(Button.new("close-commit-instructions").size(26).flex_none().flex().items_center().justify_center().rounded(5).bg("#00000000").text_color(t.muted)
+          .accessibility_label("Close commit instructions").tooltip("Close").hover(el => el.bg(t.hover).text_color(t.foreground)).focus(el => el.bg(t.hover))
+          .on_click(() => closeOverlay(this.options.overlay)).child(svg("mods/pane/close.svg").size(13))))
+      .child(div().truncate().tooltip(this.options.root).text_size(12).text_color(t.muted).child(`Commit subject style for ${this.options.root.split(/[\\/]/).filter(Boolean).pop()}.`))
+      .child(Textarea.new(this.input).flex_1().min_h(100).w_full().p(10).rounded(5).border_1().border_color(t.input).bg(t.background).text_size(13).line_height("20px")
+        .accessibility_label("Commit generation instructions"))
+      .when(Boolean(this.error), el => el.child(div().text_size(12).text_color(t.ansi1).child(this.error)))
+      .child(h_flex().items_center().gap(12)
+        .child(div().flex_1().text_size(11).text_color(t.muted).child("Leave empty to use the default style."))
+        .child(Button.new("save-commit-instructions").h(30).px(14).rounded(5).bg(t.accent).text_color(t.accent_foreground).text_size(12)
+          .accessibility_label("Save commit instructions").hover(el => el.opacity(0.9)).focus(el => el.border_1().border_color(t.foreground))
+          .on_click((_e, cx) => this.save(cx)).child("Save")));
+  }
 }
 
 export class CommitGenerator {
@@ -60,7 +96,7 @@ export class CommitGenerator {
 
   generate(cx) {
     if (!this.enabled() || !this.owner.files.length || !this.model()) return;
-    const p = this.owner, s = { ...p.gitToolbar.snapshot(), selected: selectedPaths(p.files), revision: p.messageRevision };
+    const p = this.owner, s = { ...p.gitToolbar.snapshot(), selected: selectedPaths(p.files), revision: p.messageRevision, instructions: shared(instructionsKey(p.root, p.on)) || "" };
     const choice = { ...this.selected };
     this.open = false; this.running = true; p.busy = true;
     cx.spawn(async cx => {
@@ -68,11 +104,20 @@ export class CommitGenerator {
         const result = await this.call({ action: "generate", ...s, ...choice }, s.on);
         if (sameDraft(p, s, this.key)) {
           p.message = result.subject; p.messageRevision++; p.input.set_value(result.subject); p.input.focus();
-        } else notify({ title: "Commit message kept", body: "Your draft or repository changed. Generate again for the current changes.", level: "info" });
+        } else notify({ title: "Commit message kept", body: "Your draft, repository or instructions changed. Generate again for the current changes.", level: "info" });
       } catch (e) { if (this.key() === s.context) showGitError("Generate commit message", e, s); }
       finally { this.running = false; p.busy = false; p.refresh(cx); cx.notify(); }
     });
     cx.notify();
+  }
+
+  instructionsButton(t, current) {
+    const p = this.owner;
+    return Button.new("commit-instructions").size(28).flex_none().flex().items_center().justify_center().rounded(5).bg("#00000000").text_color(t.muted)
+      .disabled(!p.root || p.busy || !current).accessibility_label("Commit instructions").tooltip("Commit instructions")
+      .hover(el => el.bg(t.hover).text_color(t.foreground)).focus(el => el.bg(t.hover).text_color(t.foreground))
+      .on_click(() => openOverlay({ mod: "changes-graph", props: { commitInstructions: true, root: p.root, on: p.on }, kind: "dialog", frame: "none", width: 520, height: 360 }))
+      .child(svg("mods/changes-graph/commit-instructions.svg").size(15));
   }
 
   option(id, text, action, t) {
