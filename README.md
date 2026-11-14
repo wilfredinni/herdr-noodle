@@ -7,12 +7,12 @@ A compact Herdr layout for coding agents, browsing files, reviewing Git changes,
 Paste this prompt into a coding agent running inside Herdr:
 
 ```text
-Read ~/.config/herdr-app/AGENTS.md, then add this layout: https://github.com/wilfredinni/herdr-noodle
+Read ~/.config/herdr-app/AGENTS.md, then install https://github.com/wilfredinni/herdr-noodle following its INSTALL.md, RECIPE.md and complete manifest.json, including helpers/noodle/.
 ```
 
-The agent reads [RECIPE.md](RECIPE.md) and the included files, follows Herdr's installation instructions, handles name conflicts, validates the mods, and switches to `noodle`.
+The agent follows [INSTALL.md](INSTALL.md), [RECIPE.md](RECIPE.md) and the included files, checks name conflicts before copying, installs the layout, Settings thumbnail, seven mods and **all of `helpers/noodle/`**, validates the installed files, and switches to `noodle`. Use the actual Herdr home if `HERDR_APP_HOME` overrides the usual path. Global settings, keys, sign-ins and runtime state are not copied.
 
-Requirements: Herdr **0.1.15** (the tested version), Git, and Python **3.9+**. `bash` and `bat` are optional for syntax-colored previews; source and diffs still open without `bat`. AI features require a supported installed and signed-in CLI.
+Tested on **macOS with Herdr 0.1.15**. Required: Git, Python **3.9+**, and ripgrep (`rg`) for Quick Open/content search. `bash` and `bat` are optional for syntax-colored previews; source and diffs still open without them. PR / CI requires an installed, signed-in `gh`; AI features require a supported installed and signed-in CLI. No pip packages are required. Linux image previews and Reveal in Finder are unavailable with the current macOS adapters; Windows is unsupported by the full package because shared helpers require Unix APIs. See [platform details](INSTALL.md#requirements).
 
 ![Noodle layout](preview.png)
 
@@ -47,7 +47,7 @@ It refreshes once a minute or on request, with limits of 2,000 directories, 64 r
 and eight seconds. Refresh's tooltip reports incomplete searches and unreadable status; open a closer
 folder when the workspace exceeds those limits. It does not fetch remotes to calculate sync state.
 
-The preview uses fictional demo content rather than anyone's workspaces, terminal history, credentials, or account usage.
+Both preview images use fictional demo content rather than anyone's workspaces, terminal history, credentials, or account usage. They illustrate the layout and do not depict every current control.
 
 ## Commit behavior
 
@@ -77,9 +77,9 @@ node --test tests/*.test.cjs
 for mod in mods/*; do herdr-app check "$mod"; done
 ```
 
-Python checks cover the package and generation scope. Node is needed only for development tests. Commit tests use disposable repositories and do not call AI providers. Herdr's check validates the initial render; also exercise the installed layout in the app.
+Python checks cover the package, an isolated copy of every manifest install entry, document-helper recovery and generation scope. Node is needed only for development tests. Commit tests use disposable repositories and do not call AI providers. Herdr's check validates the initial render; also follow [destination validation](INSTALL.md#validate-on-the-destination) to exercise installed helpers and saving.
 
-Switch back with `herdr-app do layout.switch '{"name":"main"}'`. To uninstall, switch away first, then remove only the `noodle` layout/preview and the seven mods you installed after checking that no other layout uses them. These files are listed in [manifest.json](manifest.json).
+Switch back with `herdr-app do layout.switch '{"name":"main"}'`. To uninstall, follow the [recorded installation mapping](INSTALL.md#remove-the-installation), including the helper directory only when unused by other layouts. Keep recovery drafts unless you explicitly choose to delete them. Installable entries are declared in [manifest.json](manifest.json).
 
 ## Sharing
 

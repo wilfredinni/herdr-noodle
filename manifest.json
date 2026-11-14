@@ -1,6 +1,9 @@
 {
   "name": "noodle",
   "testedHerdrVersion": "0.1.15",
+  "layout": "layouts/noodle.json",
+  "preview": "layouts/noodle.png",
+  "helpers": ["helpers/noodle"],
   "mods": [
     "spaces-paths",
     "files-browser",
