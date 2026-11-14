@@ -42,8 +42,10 @@ def prepare(request, home):
         if operation == 'duplicate':
             raise ValueError('Duplicate is available for individual files')
     records = dirty_documents(home, source)
+    snapshot = fingerprint(source)
     return {'root': str(root), 'path': str(source.relative_to(root)), 'destination': str(destination.relative_to(root)) if destination else None,
-            'operation': operation, 'snapshot': fingerprint(source),
+            # Preserve filesystem integers beyond JavaScript's safe number range.
+            'operation': operation, 'snapshot': [str(value) for value in snapshot] if snapshot else None,
             'drafts': [{'id': m['id'], 'path': m['path'], 'revision': m['revision']} for m in records]}
 
 

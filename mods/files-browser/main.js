@@ -202,9 +202,16 @@ export default class Files extends View {
 
   rows(prefix, depth, out, t) {
     if (out.length >= TOTAL || depth > 40) return out;
+    const inline = this.tools?.mode === "inline";
+    if (inline && this.tools.operationName !== "rename" && this.tools.inlineParent === prefix) out.push(this.tools.inlineRow(depth, t));
     for (const entry of this.entries.get(prefix) ?? []) {
       if (out.length >= TOTAL) break;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = fileState(this.git, `${this.root}/${path}`), icon = fileIcon(entry.name, entry.dir);
+      if (inline && this.tools.operationName === "rename" && this.tools.target === path) {
+        out.push(this.tools.inlineRow(depth, t));
+        if (entry.dir && open) this.rows(path, depth + 1, out, t);
+        continue;
+      }
       const muted = mark === "ignored" || mark === "outside";
       const color = mark === "M" ? t.ansi3 : mark === "A" ? t.ansi2 : mark === "U" || mark === "D" ? t.ansi1 : muted ? t.muted : t.foreground;
       const iconColor = muted ? t.dim : ["A", "M", "U", "D"].includes(mark) ? color : t[icon.color];
@@ -234,7 +241,7 @@ export default class Files extends View {
       .when(this.tools?.mode === "tasks", el => el.child(this.tasks.render(t, cx)))
       .when(!this.tools || this.tools.mode !== "tasks", el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
         .when(Boolean(this.tools), el => el.child(this.tools.context(div().id("files-empty-space").flex_1().min_h(1).w_full().bg(t.background), "", true)))
-        .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
+        .when(Boolean(this.error) || (!this.entries.get("")?.length && this.tools?.mode !== "inline"), el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))));
     return this.tools ? this.tools.contextArea(panel, t, cx) : panel;
   }

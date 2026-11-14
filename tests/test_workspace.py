@@ -75,6 +75,21 @@ class WorkspaceTests(WorkspaceFixture):
         with self.assertRaises(ValueError): self.call('document_open', path='link')
         self.operation('trash', 'link')
         self.assertFalse(os.path.lexists(self.root / 'link'))
+    def test_file_operations_preserve_snapshots_through_javascript_numbers(self):
+        file = self.file()
+        os.utime(file, ns=(1700000000000000001, 1700000000000000001))
+        prepared = self.call('file_prepare', operation='rename', path=file.name, destination='renamed.txt')
+        # JSON numbers cross the mod as IEEE-754 doubles, including nanosecond times.
+        prepared = json.loads(json.dumps(prepared), parse_int=float)
+        self.call('file_apply', prepared=prepared)
+        renamed = self.root / 'renamed.txt'
+        self.assertEqual(renamed.read_bytes(), b'hello\n')
+        prepared = self.call('file_prepare', operation='rename', path=renamed.name, destination='changed.txt')
+        prepared = json.loads(json.dumps(prepared), parse_int=float)
+        renamed.write_bytes(b'changed externally')
+        with self.assertRaisesRegex(ValueError, 'item changed'):
+            self.call('file_apply', prepared=prepared)
+        self.assertTrue(renamed.exists())
     def test_dirty_resolution_and_relocation(self):
         file = self.file(); doc = self.call('document_open', path=file.name)
         Path(doc['inputPath']).write_bytes(b'draft')

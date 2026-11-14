@@ -1,6 +1,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Input, InputState, Button, Popup } from "gpui-base";
 import { appHome, exec, shared, setShared, panes, focused, run, closeOverlay, props, openOverlay, settings } from "herdr";
+import { fileIcon } from "./fileIcons.js";
 
 export async function workspaceCall(action, request) {
   const r = await exec("python3", [`${appHome()}/helpers/noodle/workspace.py`, action, JSON.stringify({ home: appHome(), ...request })]);
@@ -13,6 +14,8 @@ export class FileTools {
     this.owner = owner; this.focus = cx.focus_handle(); this.client = `files-${Date.now()}-${Math.random().toString(36).slice(2)}`; this.query = InputState.new({ placeholder: "Find files…" }); this.path = InputState.new({ placeholder: "Path inside the selected folder…" });
     this.query.on("change", (_e, cx) => this.search(cx));
     this.query.on("submit", (_e, cx) => { if (this.results?.[this.at || 0]) this.select(this.results[this.at || 0], cx); });
+    this.path.on("submit", (_e, cx) => { if (["inline", "operation"].includes(this.mode) && !this.prepared) this.prepare(cx); });
+    this.path.on("change", (_e, cx) => { if (this.mode === "inline") { this.error = null; cx.notify(); } });
   }
   show(mode, cx) {
     this.mode = mode; this.error = null; this.results = []; this.at = 0;
@@ -38,20 +41,37 @@ export class FileTools {
   }
   select(item, cx) { this.owner.show(item.path, cx, { line: item.line, column: item.column }); if (this.owner.palette) closeOverlay(props().overlay); }
   operation(operation, target, cx) {
+    if (this.busy) return;
     this.operationName = operation; this.target = target; this.prepared = null; this.error = null;
     const parent = this.targetDir ? target : target.split("/").slice(0, -1).join("/");
+    if (["new_file", "new_folder", "rename"].includes(operation)) {
+      this.inlineParent = operation === "rename" ? target.split("/").slice(0, -1).join("/") : parent;
+      const name = operation === "rename" ? target.split("/").pop() : "";
+      this.path.set_value(name); this.mode = "inline"; this.contextOpen = null; this.contextPoint = null;
+      if (this.inlineParent && !this.owner.folders.has(this.inlineParent)) this.owner.toggle(this.inlineParent, cx);
+      this.path.focus();
+      const dot = name.lastIndexOf(".");
+      this.path.set_selected_range({ start: 0, end: !this.targetDir && dot > 0 ? dot : name.length });
+      cx.notify(); return;
+    }
     this.path.set_value(["rename", "move", "duplicate"].includes(operation) ? target : parent ? parent + "/" : ""); this.mode = "operation"; this.path.focus(); cx.notify();
   }
   prepare(cx) {
     if (this.busy) return;
+    const inline = this.mode === "inline", name = this.path.value();
+    if (inline && (!name.trim() || name === "." || name === ".." || /[\\/\0\r\n]/.test(name))) {
+      this.error = "Enter a name without path separators."; cx.notify(); return;
+    }
+    const value = inline ? (this.inlineParent ? `${this.inlineParent}/${name}` : name) : name.trim();
+    if (inline && this.operationName === "rename" && value === this.target) { this.dismiss(cx); return; }
     this.busy = true; this.error = null;
     const root = this.owner.root, operation = this.operationName;
-    const path = operation.startsWith("new_") ? this.path.value().trim() : this.target;
-    const destination = ["rename", "move", "duplicate"].includes(operation) ? this.path.value().trim() : undefined;
+    const path = operation.startsWith("new_") ? value : this.target;
+    const destination = ["rename", "move", "duplicate"].includes(operation) ? value : undefined;
     const proceed = cx => {
       cx.spawn(async cx => {
         try { if (root !== this.owner.root) throw new Error("The selected folder changed. Review the operation again."); this.prepared = await workspaceCall("file_prepare", { root, operation, path, destination }); if (!this.prepared.drafts.length) await this.apply(null, cx); }
-        catch (e) { setShared("noodle.documents.request", null); this.error = e.message; }
+        catch (e) { setShared("noodle.documents.request", null); this.prepared = null; this.error = e.message; }
         finally { this.busy = false; cx.notify(); }
       });
     };
@@ -170,6 +190,24 @@ export class FileTools {
         .when(Boolean(this.prepared?.drafts.length), el => el
           .child(button("save-before-operation", "Save & continue", cx => this.confirm("save", cx)))
           .child(button("discard-before-operation", "Discard & continue", cx => this.confirm("discard", cx)))));
+  }
+  inlineRow(depth, t) {
+    const directory = this.operationName === "new_folder" || (this.operationName === "rename" && this.targetDir);
+    const icon = fileIcon(this.path.value(), directory);
+    const button = (id, label, resolution) => Button.new(id).h(26).px(6).text_size(11).disabled(Boolean(this.busy)).child(label).on_click((_e, cx) => this.confirm(resolution, cx));
+    return v_flex().id("files-inline-operation").flex_none().pl(8 + depth * 18).pr(8).gap(4)
+      .on_key_down((e, cx) => { if (e.key === "escape") { if (!this.busy) this.dismiss(cx); cx.stop_propagation(); } })
+      .on_mouse_down_out((_e, cx) => { if (!this.busy && !this.prepared?.drafts.length) this.dismiss(cx); })
+      .child(h_flex().h(28).gap(7).items_center()
+        .child(div().w(12).flex_none()).child(svg(icon.path).w(18).h(16).flex_none().text_color(t[icon.color]))
+        .child(Input.new(this.path).flex_1().min_w(0).h(26).px(4).rounded(0).border_1().border_color(this.error ? t.ansi1 : t.accent).bg(t.background).text_size(13).disabled(Boolean(this.busy || this.prepared?.drafts.length))
+          .accessibility_label(this.operationName === "rename" ? "Rename item" : directory ? "New folder name" : "New file name")))
+      .when(Boolean(this.busy), el => el.child(div().pl(37).text_size(11).text_color(t.muted).child("Saving…")))
+      .when(Boolean(this.error), el => el.child(div().pl(37).text_size(12).text_color(t.ansi1).child(this.error)))
+      .when(Boolean(this.prepared?.drafts.length), el => el.child(v_flex().pl(37).gap(4)
+        .child(div().text_size(12).child(`${this.prepared.drafts.length} unsaved draft(s). Save or discard before continuing.`))
+        .child(h_flex().gap(4).flex_wrap().child(button("inline-save-drafts", "Save & continue", "save")).child(button("inline-discard-drafts", "Discard & continue", "discard")))))
+      .when(Boolean(this.prepared?.drafts.length), el => el.child(Button.new("inline-cancel").h(26).text_size(11).disabled(Boolean(this.busy)).child("Cancel").on_click((_e, cx) => this.dismiss(cx))));
   }
   palette(t, cx) {
     return v_flex().size_full().min_h(0).rounded(10).overflow_hidden().bg(t.popover).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
