@@ -12,7 +12,8 @@ import { readFile } from "fs/promises";
 function location() {
   const space = spaces().find(s => s.active), f = focused();
   const all = panes(), active = f?.pane ? all.find(p => p.pane === f.pane) : null;
-  const selection = ["git-file-preview", "file-editor"].includes(active?.mod) ? shared(`${active.mod}.${f.tab}`) : null;
+  const selection = active?.mod === "changes-graph" ? shared(`github.preview.${f.tab}`)
+    : ["git-file-preview", "file-editor"].includes(active?.mod) ? shared(`${active.mod}.${f.tab}`) : null;
   const pane = selection ? all.find(p => p.pane === selection.sourcePane) : active;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   const workspace = pane?.cwd || selection?.root || f?.cwd || space?.folder;

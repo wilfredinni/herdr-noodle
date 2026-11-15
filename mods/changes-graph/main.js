@@ -9,13 +9,15 @@ import { CommitGenerator, CommitInstructions } from "./commitGenerator.js";
 import { Repositories } from "./repositories.js";
 import { StashPanel } from "./stashPanel.js";
 import { GithubPanel } from "./githubPanel.js";
+import { GithubPreview } from "./githubPreview.js";
 import { PrComposer, PrSettings } from "./prComposer.js";
 import { git, stage, trash, addIgnore } from "./fileOps.js";
 
 function sourceLocation() {
   const space = spaces().find((s) => s.active), f = focused();
   const all = panes(), active = f?.pane ? all.find(p => p.pane === f.pane) : null;
-  const selection = ["git-file-preview", "file-editor"].includes(active?.mod) ? shared(`${active.mod}.${f.tab}`) : null;
+  const selection = active?.mod === "changes-graph" ? shared(`github.preview.${f.tab}`)
+    : ["git-file-preview", "file-editor"].includes(active?.mod) ? shared(`${active.mod}.${f.tab}`) : null;
   const pane = selection ? all.find(p => p.pane === selection.sourcePane) : active;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
@@ -44,6 +46,7 @@ export default class Changes extends View {
     if (options?.commitInstructions) { this.commitInstructions = new CommitInstructions(options); return; }
     if (options?.prComposer) { this.prComposer = new PrComposer(options, cx); return; }
     if (options?.prSettings) { this.prSettings = new PrSettings(options); return; }
+    if (options?.githubPreview) { this.githubPreview = new GithubPreview(options, cx); return; }
     this.drafts = new Map(); this.repositories = new Repositories(this, workspace, cx);
     this.view = "changes"; this.graph = []; this.graphError = null; this.selectedCommit = null; this.detail = null; this.detailError = null;
     this.history = []; this.historyError = null; this.historyLoading = false;
@@ -543,6 +546,7 @@ export default class Changes extends View {
     if (this.commitInstructions) return this.commitInstructions.render(theme());
     if (this.prComposer) return this.prComposer.render(theme(), cx);
     if (this.prSettings) return this.prSettings.render(theme());
+    if (this.githubPreview) return this.githubPreview.render(theme(), cx);
     this.repositories.refresh(cx);
     const current = key() === this.context;
     if (!current) this.refresh(cx);

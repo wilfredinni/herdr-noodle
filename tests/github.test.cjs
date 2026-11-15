@@ -29,21 +29,24 @@ function load(c, file, names) {
   vm.runInContext(`(() => { ${source}\nObject.assign(globalThis, {${names.join(',')}}); })()`, c);
 }
 function harness() {
-  const state = new Map(), jobs = [], timers = [], requests = [], overlays = [], closed = [], clipboard = [], urls = [], files = new Map();
+  const state = new Map(), jobs = [], timers = [], requests = [], overlays = [], closed = [], clipboard = [], urls = [], files = new Map(), commands = [];
+  const paneList = [{pane:"terminal",terminal:"t",tab:"tab",cwd:"/repo"}];
   let response = action => action === 'ready' ? { ready: true, head: 'a'.repeat(40), branch: 'feature' } : action === 'info' ? { repo: { name: 'example/repo' }, templates: [] } : action === 'prs' || action === 'runs' ? { items: [], more: false } : {};
   let notifications = 0;
   const cx = { notify() { notifications++; }, focus_handle: () => ({ focus() {} }), timer: { every(ms, fn) { timers.push({ ms, fn }); } },
     spawn(fn) { jobs.push(fn(cx)); }, write_to_clipboard(value) { clipboard.push(value); }, open_url(value) { urls.push(value); } };
   const c = vm.createContext({ Map, Set, Date, JSON, div: element, svg: () => element(), image: element, v_flex: element, h_flex: element,
-    Button: { new: element }, InputState: { new: input }, TextareaState: { new: input }, Input: { new: element }, Textarea: { new: element }, Checkbox: { new: element },
+    Button: { new: element }, Tabs: { new: element }, Tab: { new: element }, InputState: { new: input }, TextareaState: { new: input }, Input: { new: element }, Textarea: { new: element }, Checkbox: { new: element },
     Popover: { new: element }, ScrollHandle: { new: () => ({ scroll_to_item() {} }) }, Scrollbar: { vertical: element }, TextView: { markdown: (id, text) => element(id).child(text) },
     shared: key => state.get(key), setShared: (key, value) => state.set(key, value), appHome: () => '/app', notify() {},
+    focused: () => ({pane:'terminal',tab:'tab'}), panes: () => paneList, run: (name,args) => commands.push({name,args}),
     openOverlay: value => overlays.push(value), closeOverlay: value => closed.push(value), shortAge: () => '1m',
     writeTextFile: async (path, value, expected) => { assert.equal(expected, '{}'); files.set(path, JSON.parse(value)); },
     exec: async (_program, args) => { const action = args[1].replace('github_', ''), request = JSON.parse(args[2]); requests.push({ action, request }); return { code: 0, stdout: JSON.stringify(await response(action, request)) }; },
   });
   load(c, 'commitGenerator.js', ['CommitGenerator']);
-  load(c, 'githubPanel.js', ['GithubPanel', 'githubCall', 'githubButton', 'githubOpen', 'threadMarkdown']);
+  load(c, 'githubPanel.js', ['GithubPanel', 'githubCall', 'githubButton', 'githubOpen', 'threadMarkdown', 'prCounts']);
+  load(c, 'githubPreview.js', ['GithubPreview']);
   load(c, 'prComposer.js', ['PrComposer', 'PrSettings', 'prSettingsKey', 'prDraftKey']);
   const t = new Proxy({}, { get: (_, key) => key });
   const owner = { root: '/repo', on: null, context: 'context', branch: 'feature', head: 'a'.repeat(40), view: 'github', files: [], gitToolbar: { render: () => element(), enabled: () => true } };
@@ -55,7 +58,8 @@ function harness() {
     view.generator.connections = [{ id: 'codex', name: 'Codex', models: [{ id: 'model', name: 'Model' }] }]; view.generator.selected = { connection: 'codex', model: 'model' };
     return view;
   };
-  return { c, cx, t, panel, owner, options, state, requests, overlays, closed, clipboard, urls, timers, files, composer,
+  return { c, cx, t, panel, owner, options, state, requests, overlays, closed, clipboard, urls, timers, files, composer, commands, paneList,
+    preview(selection) { state.set("github.preview.tab", selection || {...owner,tab:"tab",sourcePane:"terminal",mode:"pr",number:1,title:"Example PR"}); return new c.GithubPreview({selectionKey:"github.preview.tab"},cx); },
     setResponse(fn) { response = fn; }, notifications: () => notifications,
     async flush() { while (jobs.length) await Promise.all(jobs.splice(0)); } };
 }
@@ -68,16 +72,24 @@ const pr = () => ({ number: 1, title: 'Example PR', html_url: 'https://github.co
     { id: 'thread-2', path: 'b.js', originalLine: 9, isResolved: true, isOutdated: true, comments: [] },
   ] });
 
-test('GitHub displays PR details, threads and complete Markdown extraction', async () => {
+test('sidebar keeps its list and selecting a row opens a separate preview with extractable reviews', async () => {
   const h = harness(), value = pr();
   h.setResponse(action => action === 'info' ? { repo: { name: 'example/repo' }, templates: [] } : action === 'prs' ? { items: [value], more: false } : value);
   h.panel.refresh(h.cx); await h.flush();
-  const tree = h.panel.render(h.t, h.cx);
-  assert.ok(find(tree, 'github-pr-detail')); assert.ok(find(tree, 'github-location-0')); assert.equal(find(tree, 'github-location-1'), undefined);
+  let tree = h.panel.render(h.t, h.cx);
+  assert.ok(find(tree, 'github-row-1')); assert.equal(find(tree, 'github-pr-detail'), undefined);
+  assert.equal(h.requests.some(r=>r.action==='pr'), false);
+  find(tree, 'github-row-1').handlers.click({},h.cx);
+  assert.equal(h.commands[0].name,'pane.split'); assert.equal(h.commands[0].args.props.githubPreview,true);
+  const preview = h.preview(h.state.get('github.preview.tab')); await h.flush();
+  preview.detailSection='reviews'; tree=preview.render(h.t,h.cx);
+  assert.ok(find(tree, 'github-pr-header')); assert.ok(find(tree, 'github-detail-overview')); assert.ok(find(tree, 'github-location-0'));
+  assert.equal(find(tree, 'github-location-1'), undefined);
   find(tree, 'github-copy-unresolved').handlers.click({}, h.cx);
   assert.match(h.clipboard[0], /a.js:4.*Unresolved/); assert.match(h.clipboard[0], /reviewer/); assert.match(h.clipboard[0], /https:\/\/github.com\/comment/);
   assert.doesNotMatch(h.clipboard[0], /b.js/);
-  h.panel.folded['thread-2'] = false; assert.ok(find(h.panel.render(h.t, h.cx), 'github-location-1'));
+  preview.folded['thread-2'] = false; assert.ok(find(preview.render(h.t,h.cx), 'github-location-1'));
+  assert.ok(find(h.panel.render(h.t,h.cx),'github-row-1'));
 });
 
 test('stale PR responses cannot replace a different selection or repository', async () => {
@@ -145,7 +157,7 @@ test('unpublished branch uses a separate Publish action and preserves its compos
 });
 
 test('PR render performs no network calls and stays bounded for a normal review', () => {
-  const h = harness(); h.panel.pr = pr(); h.panel.prs = [h.panel.pr];
+  const h = harness(); h.panel.prs = [pr()];
   const before = h.requests.length, start = performance.now();
   for (let i = 0; i < 100; i++) h.panel.render(h.t, h.cx);
   assert.equal(h.requests.length, before); assert.ok(performance.now() - start < 1500);
@@ -154,22 +166,23 @@ test('PR render performs no network calls and stays bounded for a normal review'
 test('branch changes reset selection and the current PR is selected beyond the first list page', async () => {
   const h = harness(), value = pr();
   h.setResponse(action => action === 'info' ? { repo: { name: 'example/repo' }, current: value } : action === 'prs' ? { items: [], more: true } : value);
-  h.panel.enter(h.cx); await h.flush(); assert.equal(h.panel.pr.number, 1);
-  assert.ok(find(h.panel.render(h.t, h.cx), 'github-back'));
-  h.panel.back(h.cx); assert.equal(h.panel.pr, null); assert.equal(h.panel.prNumber, null);
-  h.panel.refresh(h.cx); await h.flush(); assert.equal(h.panel.pr, null);
+  h.panel.enter(h.cx); await h.flush(); assert.equal(h.panel.prNumber, 1);
+  assert.ok(find(h.panel.render(h.t,h.cx), 'github-row-1'));
+  assert.equal(find(h.panel.render(h.t,h.cx), 'github-back'), undefined);
+  assert.equal(h.commands.length,0);
   h.owner.branch = 'other'; h.panel.enter(h.cx); await h.flush();
   assert.equal(h.panel.loadedBranch, 'other');
 });
 
-test('workflow details copy failure logs with the run, commit and truncation context', async () => {
-  const h = harness(); h.panel.mode = 'workflows';
-  h.panel.run = { id: 42, display_title: 'Tests', html_url: 'https://github.com/example/repo/actions/runs/42', head_branch: 'feature', head_sha: 'a'.repeat(40), jobs: [{ id: 1, name: 'Test', status: 'completed', conclusion: 'failure', steps: [{ name: 'Run tests', conclusion: 'failure' }] }] };
-  h.panel.runId = 42;
-  h.setResponse(() => ({ text: 'AssertionError: example', head: 'a'.repeat(40), truncated: true }));
-  const tree = h.panel.render(h.t, h.cx); assert.ok(find(tree, 'github-job-log-1'));
-  find(tree, 'github-failed-logs').handlers.click({}, h.cx); await h.flush();
-  assert.match(h.clipboard[0], /AssertionError/); assert.match(h.clipboard[0], /Truncated/); assert.match(h.clipboard[0], /runs\/42/);
+test('workflow preview copies failure logs while the run remains in the sidebar', async () => {
+  const h=harness(), run={id:42,display_title:'Tests',html_url:'https://github.com/example/repo/actions/runs/42',head_branch:'feature',head_sha:'a'.repeat(40),jobs:[{id:1,name:'Test',status:'completed',conclusion:'failure',steps:[{name:'Run tests',conclusion:'failure'}]}]};
+  h.panel.mode='workflows';h.panel.runs=[run];
+  h.setResponse(action=>action==='run'?run:{text:'AssertionError: example',head:'a'.repeat(40),truncated:true});
+  const preview=h.preview({...h.owner,tab:'tab',sourcePane:'terminal',mode:'run',number:42});await h.flush();
+  const tree=preview.render(h.t,h.cx);assert.ok(find(tree,'github-job-log-1'));
+  find(tree,'github-failed-logs').handlers.click({},h.cx);await h.flush();
+  assert.match(h.clipboard[0],/AssertionError/);assert.match(h.clipboard[0],/Truncated/);assert.match(h.clipboard[0],/runs\/42/);
+  assert.ok(find(h.panel.render(h.t,h.cx),'github-row-42'));
 });
 
 test('remote browsing resolves the helper home on the remote machine', async t => {
@@ -183,4 +196,50 @@ test('remote browsing resolves the helper home on the remote machine', async t =
   };
   const result = await h.c.githubCall('prs', { root: '/remote/repo', on: 'worker' });
   assert.equal(result.home, home); assert.equal(result.root, '/remote/repo');
+});
+
+test('selecting another item reuses only the GitHub preview in that tab', () => {
+  const h=harness();
+  h.panel.openPreview(pr(),'pr',h.cx);
+  h.paneList.push({pane:'github',mod:'changes-graph',tab:'tab'},{pane:'diff',mod:'git-file-preview',tab:'tab'});
+  h.c.focused=()=>({pane:'github',tab:'tab'});
+  h.panel.openPreview({id:42,name:'Tests'},'run',h.cx);
+  assert.equal(h.commands.at(-1).name,'pane.focus');assert.equal(h.commands.at(-1).args.pane,'github');
+  assert.equal(h.state.get('github.preview.tab').mode,'run');assert.equal(h.state.get('github.preview.tab').sourcePane,'terminal');
+  h.paneList.push({pane:'other-terminal',terminal:'other',tab:'other',cwd:'/repo'});
+  h.c.focused=()=>({pane:'other-terminal',tab:'other'});
+  h.panel.openPreview(pr(),'pr',h.cx);
+  assert.equal(h.commands.at(-1).name,'pane.split');assert.equal(h.state.get('github.preview.other').sourcePane,'other-terminal');
+  assert.equal(h.state.get('github.preview.tab').mode,'run');
+});
+
+test('preview refresh keeps its detail tab and rejects a late selection', async () => {
+  const h=harness();h.setResponse(()=>pr());const preview=h.preview();await h.flush();
+  preview.detailSection='reviews';preview.folded['thread-1']=true;preview.refresh(h.cx);await h.flush();
+  assert.equal(preview.detailSection,'reviews');assert.equal(preview.folded['thread-1'],true);
+  let complete;
+  h.setResponse((_action,r)=>r.number===1?new Promise(resolve=>{complete=resolve;}):({...pr(),number:2,title:'Second PR'}));
+  preview.refresh(h.cx);
+  h.state.set('github.preview.tab',{...h.state.get('github.preview.tab'),number:2});
+  preview.render(h.t,h.cx);complete(pr());await h.flush();
+  assert.equal(preview.pr.number,2);assert.equal(preview.detailSection,'overview');
+});
+
+test('filter input is retained and selected PR remains visible after a list refresh', async () => {
+  const h=harness(),value=pr(),input=h.panel.search;
+  h.panel.info=h.options.info;h.panel.prs=[value,{...value,number:2,title:'Other change'}];
+  h.panel.openPreview(value,'pr',h.cx);
+  input.type('other',h.cx);let tree=h.panel.render(h.t,h.cx);
+  assert.ok(find(tree,'github-row-2'));assert.equal(find(tree,'github-row-1'),undefined);assert.equal(h.panel.search,input);
+  input.type('',h.cx);h.setResponse(()=>({items:[],more:true}));h.panel.refresh(h.cx);await h.flush();
+  tree=h.panel.render(h.t,h.cx);assert.ok(find(tree,'github-row-1'));assert.equal(h.panel.prNumber,1);
+});
+
+test('GitHub review locations keep their own root and open a pinned read-only source', async () => {
+  const h=harness();h.setResponse(action=>action==='pr'?pr():{local:true,head:'b'.repeat(40)});
+  const preview=h.preview();await h.flush();
+  preview.openThread(preview.pr.threads[0],h.cx);await h.flush();
+  const selection=h.state.get('git-file-preview.tab');
+  assert.equal(selection.root,'/repo');assert.equal(selection.hash,'b'.repeat(40));assert.equal(selection.kind,'file');assert.equal(selection.navigation.line,4);
+  assert.equal(h.commands.at(-1).args.mod,'git-file-preview');
 });

@@ -57,6 +57,21 @@ test('file search results use the same editor route', () => {
   assert.equal(h.state.get('file-editor.one').file.path, 'found.ts');
 });
 
+test('GitHub preview focus preserves the source workspace and selected repository', () => {
+  const h = harness();
+  h.panes.push({ pane: 'github', tab: 'one', mod: 'changes-graph' });
+  h.state.set('github.preview.one', { root: '/workspace/repo/nested', sourcePane: 'terminal' });
+  h.state.set('git.repository.s', { workspace: '/workspace/repo', on: null, root: '/workspace/repo/nested' });
+  h.focus('github');
+  assert.equal(h.context.sourceLocation().cwd, '/workspace/repo');
+  assert.equal(h.context.location().workspace, '/workspace/repo');
+  assert.equal(h.context.location().cwd, '/workspace/repo/nested');
+  h.files.root = '/workspace/repo/nested';
+  h.files.context = { key: h.context.key() };
+  h.files.show('example.js', h.cx);
+  assert.equal(h.state.get('file-editor.one').sourcePane, 'terminal');
+});
+
 test('View History selects Changes history without opening a file or touching either selection', () => {
   const h = harness(), tools = new h.context.FileTools(h.files, h.cx);
   tools.target = 'file.ts'; tools.history(h.cx);
