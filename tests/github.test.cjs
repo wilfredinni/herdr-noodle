@@ -36,7 +36,7 @@ function harness() {
   const cx = { notify() { notifications++; }, stop_propagation() {}, focus_handle: () => ({ focus() {} }), timer: { every(ms, fn) { timers.push({ ms, fn }); } },
     spawn(fn) { jobs.push(fn(cx)); }, write_to_clipboard(value) { clipboard.push(value); }, open_url(value) { urls.push(value); } };
   const c = vm.createContext({ Map, Set, Date, JSON, div: element, svg: () => element(), image: element, v_flex: element, h_flex: element,
-    Button: { new: element }, Tabs: { new: element }, Tab: { new: element }, InputState: { new: input }, TextareaState: { new: input }, Input: { new: element }, Textarea: { new: element }, Checkbox: { new: element },
+    Button: { new: element }, v_virtual_list: (id,count,size,key,render)=>{const node=element(id);node.attrs.virtual={count,size,key,render};return node;}, Tabs: { new: element }, Tab: { new: element }, InputState: { new: input }, TextareaState: { new: input }, Input: { new: element }, Textarea: { new: element }, Checkbox: { new: element },
     Popover: { new: element }, ScrollHandle: { new: () => ({ scroll_to_item() {} }) }, Scrollbar: { vertical: element }, TextView: { markdown: (id, text) => element(id).child(text) },
     shared: key => state.get(key), setShared: (key, value) => state.set(key, value), appHome: () => '/app', notify() {},
     focused: () => ({pane:'terminal',tab:'tab'}), panes: () => paneList, run: (name,args) => commands.push({name,args}),
@@ -45,6 +45,7 @@ function harness() {
     exec: async (_program, args) => { const action = args[1].replace('github_', ''), request = JSON.parse(args[2]); requests.push({ action, request }); return { code: 0, stdout: JSON.stringify(await response(action, request)) }; },
   });
   load(c, 'commitGenerator.js', ['CommitGenerator']);
+  load(c, 'reviewMarkdown.js', ['reviewSegments', 'diffColor', 'reviewMarkdown']);
   load(c, 'githubPanel.js', ['GithubPanel', 'githubCall', 'githubButton', 'githubOpen', 'threadMarkdown', 'prCounts']);
   load(c, 'githubPreview.js', ['GithubPreview']);
   load(c, 'prComposer.js', ['PrComposer', 'PrSettings', 'prSettingsKey', 'prDraftKey']);
@@ -288,4 +289,25 @@ test('base picker ignores stale repository responses and cannot select while gen
   view.branches=['main','develop'];view.chooseBase('develop',h.cx);assert.equal(view.base.value(),'main');
   h.state.set('github.active',{...h.owner});view.busy=true;
   view.chooseBase('develop',h.cx);assert.equal(view.base.value(),'main');
+});
+
+test('review diff fences get colors while prose, other languages and copied code remain intact', () => {
+  const h=harness(),body='Please fix this.\n\n```diff\n--- original\n+++ suggested\n@@ -1 +1 @@\n-old()\n+new()\n```\n\nKeep this explanation.';
+  const parts=h.c.reviewSegments(body);assert.equal(parts.length,3);assert.equal(parts[1].kind,'diff');
+  assert.equal(parts[1].text,'--- original\n+++ suggested\n@@ -1 +1 @@\n-old()\n+new()\n');
+  assert.equal(h.c.diffColor('-old()'),'ansi1');assert.equal(h.c.diffColor('+new()'),'ansi2');assert.equal(h.c.diffColor('@@ -1 +1 @@'),'ansi4');assert.equal(h.c.diffColor('--- old'),'muted');
+  assert.equal(h.c.diffColor('+++counter'),'ansi2');
+  const tree=h.c.reviewMarkdown('review',body,h.t),list=find(tree,'review-1-lines').attrs.virtual;
+  const rows=list.render({start:0,end:5});assert.equal(rows[3].attrs.text_color[0],'ansi1');assert.equal(rows[4].attrs.text_color[0],'ansi2');
+  find(tree,'review-1-copy').handlers.click({},h.cx);assert.equal(h.clipboard[0],parts[1].text);
+  const python='```python\nprint("hello")\n```';assert.equal(h.c.reviewSegments(python)[0].text,python);
+});
+
+test('review fence parsing respects longer fences, CRLF, tilde fences and incomplete diffs', () => {
+  const h=harness();
+  const literal='````text\n```diff\n+literal\n```\n````';assert.equal(h.c.reviewSegments(literal)[0].text,literal);
+  assert.equal(h.c.reviewSegments('~~~patch\r\n+new\r\n~~~')[0].text,'+new\r\n');
+  assert.equal(h.c.reviewSegments('```diff\n-unfinished')[0].text,'-unfinished');
+  const tree=h.c.reviewMarkdown('long','```diff\n'+Array.from({length:1000},(_,i)=>'+'+i).join('\n')+'\n```',h.t);
+  const list=find(tree,'long-0-lines').attrs.virtual;assert.equal(list.count,1000);assert.equal(list.render({start:900,end:920}).length,20);
 });

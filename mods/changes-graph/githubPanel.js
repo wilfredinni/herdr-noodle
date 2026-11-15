@@ -1,7 +1,8 @@
 import { div, svg } from "gpui-kit";
-import { v_flex, h_flex, Button, Scrollbar, TextView, InputState, Input, Tabs, Tab, ScrollHandle } from "gpui-base";
+import { v_flex, h_flex, Button, Scrollbar, InputState, Input, Tabs, Tab, ScrollHandle } from "gpui-base";
 import { exec, appHome, shared, setShared, openOverlay, focused, panes, run } from "herdr";
 import { shortAge } from "./graph.js";
+import { reviewMarkdown } from "./reviewMarkdown.js";
 
 export async function githubCall(action, request) {
   let args = [`${appHome()}/helpers/noodle/workspace.py`, `github_${action}`, JSON.stringify({ home: appHome(), ...request })];
@@ -175,7 +176,7 @@ export class GithubPanel {
     return v_flex().flex_none().gap(8).pt(14).border_t(1).border_color(t.border)
       .child(div().text_size(12).font_semibold().child(title)).children(children);
   }
-  markdown(id, value, t) { return TextView.markdown(id, value || "No description.").text_size(12).line_height("19px").text_color(t.foreground); }
+  markdown(id, value, t) { return reviewMarkdown(id, value, t); }
 
   prDetail(t, cx) {
     const pr = this.pr;
