@@ -25,7 +25,7 @@ function harness(repositoryCount = 2) {
   const input = { text: '', on() {}, set_value(text) { this.text = text; }, value() { return this.text; } };
   const root = () => cwd === '/workspace' ? null : cwd;
   const context = vm.createContext({ View: class {}, Map, JSON, Date,
-    div: element, svg: () => element(), v_flex: element, h_flex: element, Button: { new: element }, Popover: { new: element }, ScrollHandle: { new: () => ({ scroll_to_item() {} }) },
+    div: element, svg: () => element(), v_flex: element, h_flex: element, Button: { new: element }, Popover: { new: element }, ScrollHandle: { new: () => ({ scroll_to_item() {} }) }, VirtualListScrollHandle: { new: () => ({ scroll_to_item() {} }) },
     spaces: () => [space], focused: () => ({ ...focus, cwd }),
     panes: () => [{ pane: 'terminal', tab: 'tab', terminal: 't', cwd }, { pane: 'preview', tab: 'tab', mod: 'git-file-preview' }],
     shared: key => state.get(key), setShared: (key, value) => state.set(key, value),

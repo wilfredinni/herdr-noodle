@@ -21,7 +21,7 @@ function harness(t, raw='﻿first\tline\r\nlast', gutter=false) {
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../mods/file-editor/gutter.js'),'utf8').replace(/export /g,'')+'\n'+source+'\nglobalThis.Documents=Documents;',context);
   const owner={selectionKey:'file-editor.one',selection:{root,on:null,kind:'file',file:{path:'file.txt'},hash:null},mode:'source',refresh(){},selectFile(){this.selection=null;},openFile(file,_commit,_cx,options){this.selection={...this.selection,...options,file};}};
   const docs=new context.Documents(owner,cx);
-  return {docs,owner,cx,root,home,raw,state,calls,commands,bindings,async flush(){while(jobs.length)await Promise.all(jobs.splice(0));},async edit(){docs.edit(cx);while(jobs.length)await Promise.all(jobs.splice(0));}};
+  return {context,docs,owner,cx,root,home,raw,state,calls,commands,bindings,async flush(){while(jobs.length)await Promise.all(jobs.splice(0));},async edit(){docs.edit(cx);while(jobs.length)await Promise.all(jobs.splice(0));}};
 }
 
 test('raw editor save preserves BOM tabs CRLF and missing final newline; source never enters process args',async t=>{
@@ -116,4 +116,14 @@ test('native Source gutter tracks HEAD versus unsaved edits and keeps markers af
  assert.ok(doc.input.marks.some(m=>m.line===4&&m.color==='#00ff00'));
  h.docs.save(h.cx);await h.flush();await h.docs.refreshGutter(doc);assert.ok(doc.input.marks.length);
  git('add','.');git('-c','commit.gpgsign=false','commit','-qm','Saved');await h.docs.refreshGutter(doc);assert.equal(doc.input.marks.length,0);
+});
+
+test('typing publishes only dirty-state transitions while preserving checkpoints and undo',async t=>{
+ const h=harness(t,'base');await h.edit();const doc=h.docs.current;let publications=0,notifications=0;
+ h.context.setShared=(key,value)=>{if(key==='noodle.documents')publications++;h.state.set(key,value);};
+ h.cx.notify=()=>notifications++;
+ for(let i=0;i<100;i++){doc.input.set_value('edit '+i);doc.input.emit();}
+ assert.equal(publications,1);assert.equal(notifications,1);assert.equal(doc.change,100);
+ await h.docs.flush(doc);assert.equal(fs.readFileSync(doc.inputPath,'utf8'),'edit 99');
+ doc.input.set_value('base');doc.input.emit();assert.equal(publications,2);assert.equal(doc.dirty,false);
 });

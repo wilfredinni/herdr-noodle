@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -46,6 +47,23 @@ class GithubTests(unittest.TestCase):
         self.assertEqual(value['items'], [row['name'] for row in first] + ['main'])
         self.assertEqual(api.call_args_list[0].args[2], 'repos/example/repo/branches?per_page=100&page=1')
         self.assertEqual(api.call_args_list[1].args[2], 'repos/example/repo/branches?per_page=100&page=2')
+
+    def test_pr_reads_checks_threads_and_reviews_concurrently_and_rechecks_head(self):
+        gate = threading.Barrier(3)
+        def checks(*args, **kwargs):
+            gate.wait(timeout=3)
+            return json.dumps({'statusCheckRollup': []})
+        def conversation(*args, **kwargs):
+            gate.wait(timeout=3)
+            return []
+        with patch.object(gh, 'pull', return_value={'head': {'sha': self.head}}) as pull, patch.object(gh, 'command', side_effect=checks), patch.object(gh, 'threads', side_effect=conversation), patch.object(gh, 'pages', side_effect=conversation):
+            value = gh.detail(self.root, REPO, 1)
+        self.assertEqual(value['threads'], [])
+        self.assertEqual(value['reviews'], [])
+        self.assertEqual(pull.call_count, 2)
+        with patch.object(gh, 'pull', side_effect=[{'head': {'sha': self.head}}, {'head': {'sha': 'changed'}}]), patch.object(gh, 'command', return_value='{}'), patch.object(gh, 'threads', return_value=[]), patch.object(gh, 'pages', return_value=[]):
+            with self.assertRaisesRegex(ValueError, 'PR changed'):
+                gh.detail(self.root, REPO, 1)
 
     def test_private_transport_cleanup_and_scope(self):
         prepared = dispatch('github_prepare', self.request)

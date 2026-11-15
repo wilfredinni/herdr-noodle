@@ -87,7 +87,7 @@ test('tree replaces the renamed row and inserts new items at their actual depth'
  const h=tools();
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../mods/files-browser/gitState.js'),'utf8').replace(/export /g,''),h.c);
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../mods/files-browser/main.js'),'utf8').replace(/^import .*;\n/gm,'').replace(/export default class /,'class ')+'\nglobalThis.Files=Files',h.c);
- Object.assign(h.owner,{tools:h.tools,rows:h.c.Files.prototype.rows,entries:new Map([['',[{name:'src',dir:true},{name:'root.md',dir:false}]],['src',[{name:'old.md',dir:false}]]]),git:h.c.gitState(null)});
+ Object.assign(h.owner,{tools:h.tools,rows:h.c.Files.prototype.rows,treeEntries:h.c.Files.prototype.treeEntries,fileRow:h.c.Files.prototype.fileRow,entries:new Map([['',[{name:'src',dir:true},{name:'root.md',dir:false}]],['src',[{name:'old.md',dir:false}]]]),git:h.c.gitState(null)});
  h.tools.targetDir=true;h.tools.operation('new_file','src',h.cx);
  let rows=h.c.Files.prototype.rows.call(h.owner,'',0,[],{});assert.equal(rows[1].id,'files-inline-operation');assert.deepEqual(rows[1].attrs.pl,[26]);
  h.tools.targetDir=false;h.tools.operation('rename','src/old.md',h.cx);

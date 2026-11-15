@@ -10,6 +10,7 @@ import tempfile
 import time
 import urllib.parse
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from storage import read_json, resolve, write_json
 
 READ = ['--no-optional-locks', '-c', 'core.fsmonitor=false', '--literal-pathspecs']
@@ -114,9 +115,11 @@ def threads(root, repo, n):
 
 def detail(root, repo, n):
     pr = pull(root, repo, n)
-    checks = json.loads(command(['gh', 'pr', 'view', number(n), '-R', repo['ref'], '--json', 'statusCheckRollup,reviewDecision'], root))
-    value = {**pr, **checks, 'threads': threads(root, repo, n),
-             'reviews': pages(root, repo, f'repos/{repo["name"]}/pulls/{number(n)}/reviews')}
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        checks = pool.submit(command, ['gh', 'pr', 'view', number(n), '-R', repo['ref'], '--json', 'statusCheckRollup,reviewDecision'], root)
+        review_threads = pool.submit(threads, root, repo, n)
+        reviews = pool.submit(pages, root, repo, f'repos/{repo["name"]}/pulls/{number(n)}/reviews')
+        value = {**pr, **json.loads(checks.result()), 'threads': review_threads.result(), 'reviews': reviews.result()}
     if pull(root, repo, n)['head']['sha'] != pr['head']['sha']:
         raise ValueError('The PR changed during refresh. Refresh again for its latest reviews and checks.')
     return value

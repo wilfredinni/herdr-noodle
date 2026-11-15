@@ -40,7 +40,7 @@ function harness(root) {
   const c = vm.createContext({ Map, Set, View: class {}, div: element, svg: () => element(), image: () => element(), h_flex: element, v_flex: element,
     Button: { new: element }, Checkbox: { new: element }, Popover: { new: element }, Tabs: { new: element }, Tab: { new: element },
     TextareaState: { new: input }, Textarea: { new: element }, InputState: { new: input }, Input: { new: element },
-    Scrollbar: { vertical: element, horizontal: element }, ScrollHandle: { new: () => ({ scroll_to_item() {} }) },
+    Scrollbar: { vertical: element, horizontal: element }, ScrollHandle: { new: () => ({ scroll_to_item() {} }) }, VirtualListScrollHandle: { new: () => ({ scroll_to_item() {} }) },
     settings: () => ({}), theme: () => t, spaces: () => [{ id: 's', active: true, folder: root, machine: null }],
     focused: () => ({ pane: 'terminal', tab: 'tab', cwd: root }), panes: () => [{ pane: 'terminal', terminal: 't', tab: 'tab', cwd: root }],
     shared: key => state.get(key), setShared: (key, value) => state.set(key, value), run() {},

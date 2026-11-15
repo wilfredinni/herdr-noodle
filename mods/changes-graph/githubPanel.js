@@ -75,8 +75,8 @@ export class GithubPanel {
     this.loading = true; this.error = null;
     cx.spawn(async cx => {
       try {
-        const info = this.info || await githubCall("info", s);
-        const data = await githubCall(mode === "prs" ? "prs" : "runs", { ...s, page, branch: this.allBranches ? null : s.branch });
+        const [info, data] = await Promise.all([this.info || githubCall("info", s),
+          githubCall(mode === "prs" ? "prs" : "runs", { ...s, page, branch: this.allBranches ? null : s.branch })]);
         if (!this.current(s) || version !== this.version || mode !== this.mode) return;
         this.info = info; this.loadedBranch = s.branch; this.page = page; this.more = data.more;
         if (mode === "prs") {

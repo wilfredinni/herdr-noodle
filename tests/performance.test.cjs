@@ -6,6 +6,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 
+let renderingRows = false;
 function element(id) {
   const node = { id, nodes: [], attrs: {} };
   let proxy;
@@ -15,7 +16,7 @@ function element(id) {
     if (['child', 'trigger', 'content'].includes(key)) return value => (target.nodes.push(value), proxy);
     if (key === 'children') return values => (target.nodes.push(...values), proxy);
     if (key === 'when') return (condition, fn) => (condition && fn(proxy), proxy);
-    return (...args) => (target.attrs[key] = args, proxy);
+    return (...args) => { if (renderingRows && key.startsWith("on_")) throw Error("Handler registered during native layout"); target.attrs[key] = args; return proxy; };
   } });
   return proxy;
 }
@@ -30,13 +31,13 @@ function harness() {
   const jobs = [], timers = [], calls = { spaces: 0, panes: 0, focused: 0 };
   let tab = 'tab', notifications = 0;
   const cx = { focus_handle: () => ({ focus() {} }), notify() { notifications++; },
-    spawn(fn) { jobs.push(fn(cx)); }, timer: { every(ms, fn) { timers.push({ ms, fn }); } } };
+    spawn(fn) { jobs.push(fn(cx)); }, timer: { every(ms, fn) { timers.push({ ms, fn }); }, after(ms, fn) { timers.push({ ms, fn, once: true }); } } };
   const input = () => ({ on() {}, set_value() {}, value: () => '', focus() {} });
   const context = vm.createContext({ console, Date, Map, Set, View: class {}, div: element, svg: () => element(), image: () => element(),
     h_flex: element, v_flex: element, Button: { new: element }, Checkbox: { new: element }, Popover: { new: element },
     InputState: { new: input }, TextareaState: { new: input }, Input: { new: element }, Textarea: { new: element },
-    ScrollHandle: { new: () => ({ scroll_to_item() {} }) }, Scrollbar: { vertical: element }, Tabs: { new: element }, Tab: { new: element },
-    v_virtual_list: element, TextView: { markdown: element }, splitRows: () => [], PathBuilder: {}, settings: () => ({}),
+    ScrollHandle: { new: () => ({ scroll_to_item() {} }) }, VirtualListScrollHandle: { new: () => ({ scroll_to_item() {} }) }, Scrollbar: { vertical: element, horizontal: element }, Tabs: { new: element }, Tab: { new: element },
+    v_virtual_list: (id,count,sizes,key,render) => { const node=element(id); node.attrs.virtual={count,sizes,key,render}; return node; }, TextView: { markdown: element }, splitRows: () => [], PathBuilder: {}, settings: () => ({}),
     theme: () => new Proxy({}, { get: (_, key) => String(key) }), props: () => ({}),
     spaces: () => { calls.spaces++; return [{ id: 's', active: true, machine: null, folder: '/repo' }]; },
     panes: () => { calls.panes++; return [{ pane: 'p', cwd: '/repo', terminal: 't', tab: 'tab' }]; },
@@ -217,4 +218,97 @@ test('unchanged Markdown keeps its render identity while changes outside the dif
   c.readMarkdown = async () => ({ text, truncated: false, deleted: false });
   view.refresh(h.cx, true); await h.flush();
   assert.equal(view.markdown.text, text); assert.equal(view.markdownError, null);
+});
+
+function changes(h) {
+  const c=h.context;
+  for (const [file,names] of [
+    ['graph',['GRAPH_ARGS','HISTORY_ARGS','GRAPH_LIMIT','GRAPH_ROW_HEIGHT','graphRows','COMMIT_FORMAT','commitDetail','refLabels','shortAge']],
+    ['gitToolbar',['GitToolbar','worktreeRows']],['fileActions',['FileActions']],['commitGenerator',['CommitGenerator']],
+    ['repositories',['Repositories']],['stashPanel',['StashPanel']],['githubPanel',['GithubPanel']],['main',['Changes']],
+  ]) load(c,`changes-graph/${file}.js`,names);
+  const spawn=h.cx.spawn;h.cx.spawn=()=>{};
+  const view=new c.Changes();view.init({},h.cx);h.cx.spawn=spawn;
+  view.loading=false;view.watch=()=>{};view.repositories.refresh=()=>{};view.generator.machine=null;
+  return view;
+}
+const find = (node,id) => node?.id===id?node:node?.nodes?.map(child=>find(child,id)).find(Boolean);
+const countNodes = node => !node || typeof node!=='object'?0:1+(node.nodes||[]).reduce((sum,child)=>sum+countNodes(child),0);
+
+test('a new repository starts reading before the previous repository finishes', async () => {
+  const h=harness(),c=h.context,view=changes(h),pending=new Map(),calls=[];let folder='/old';
+  c.spaces=()=>[{id:'s',active:true,folder,machine:null}];c.panes=()=>[{pane:'p',tab:'tab',terminal:'t',cwd:folder}];
+  c.exec=async(_program,args,options)=>{calls.push(options.cwd);return new Promise(resolve=>pending.set(options.cwd,resolve));};
+  view.refresh(h.cx);folder='/new';view.refresh(h.cx);
+  assert.deepEqual(calls,['/old','/new']);
+  pending.get('/old')({code:1,stdout:''});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(view.loading,true);assert.match(view.context,/new/);
+  pending.get('/new')({code:1,stdout:''});await h.flush();assert.equal(view.loading,false);
+});
+
+test('Changes coalesces folder bursts and preserves an event received during a read', async () => {
+  const h=harness(),c=h.context,view=changes(h);let finish,reads=0;
+  c.exec=async()=>{reads++;return new Promise(resolve=>{finish=resolve;});};
+  view.scheduleRefresh(h.cx);view.scheduleRefresh(h.cx);view.scheduleRefresh(h.cx);
+  for(const timer of h.timers.filter(t=>t.once))timer.fn(h.cx);
+  assert.equal(reads,1);view.refresh(h.cx);assert.equal(view.refreshAgain,true);
+  finish({code:1,stdout:''});await h.flush();
+  const retry=h.timers.at(-1);assert.equal(retry.once,true);retry.fn(h.cx);assert.equal(reads,2);
+  finish({code:1,stdout:''});await h.flush();
+});
+
+test('Files refreshes only event-related expanded folders and skips listing for Git-only changes', async () => {
+  const h=harness(),c=h.context;
+  load(c,'files-browser/gitState.js',['gitState','fileState']);load(c,'files-browser/main.js',['Files','key']);
+  const view=new c.Files();const spawn=h.cx.spawn;h.cx.spawn=()=>{};view.init({},h.cx);h.cx.spawn=spawn;
+  view.loading=false;view.watch=()=>{};view.folders=new Set(['one','two']);const loaded=[];
+  view.loadFolder=async path=>loaded.push(path);c.exec=async()=>({code:1,stdout:''});
+  view.refresh(h.cx,['/repo/one/new.js']);await h.flush();assert.deepEqual(loaded,['one']);
+  loaded.length=0;view.refresh(h.cx,['/repo/.git/index']);await h.flush();assert.deepEqual(loaded,[]);
+  view.scheduleRefresh(h.cx,['/repo/one/a']);view.scheduleRefresh(h.cx,['/repo/two/b']);
+  for(const timer of h.timers.filter(t=>t.once))timer.fn(h.cx);await h.flush();assert.deepEqual(loaded,['one','two']);
+});
+
+test('large lists bound rendering while retaining Changes controls on every page', () => {
+  const h=harness(),c=h.context;h.cx.spawn=()=>{};
+  load(c,'files-browser/gitState.js',['gitState','fileState']);load(c,'files-browser/fileIcons.js',['fileIcon']);load(c,'files-browser/main.js',['Files','key']);
+  const files=new c.Files();files.init({},h.cx);files.loading=false;
+  files.entries=new Map([['',Array.from({length:5000},(_,i)=>({name:`file-${i}.js`,dir:false}))]]);
+  const tree=files.render(h.cx), list=find(tree,'files-tree-rows').attrs.virtual;
+  assert.equal(list.count,5000);assert.ok(countNodes(tree)<100);
+  renderingRows=true;const visible=list.render({start:4200,end:4220});renderingRows=false;assert.equal(visible.length,20);assert.match(visible[0].id,/file-4200/);
+  const view=changes(h);Object.assign(view,{root:'/repo',on:null,context:JSON.stringify({cwd:'/repo',on:null}),loading:false});
+  view.files=Array.from({length:1000},(_,i)=>({path:`file-${i}.js`,status:'M',unstaged:true,add:1,del:0}));
+  const changed=view.render(h.cx);
+  assert.ok(countNodes(changed)<800);assert.ok(find(changed,'changes-next'));
+  view.changePage=19;const lastPage=view.render(h.cx);
+  assert.ok(find(lastPage,'change-unstaged-file-999.js:tracked'));assert.equal(find(lastPage,'change-unstaged-file-0.js:tracked'),undefined);
+  assert.ok(find(lastPage,'select-file-unstaged-file-999.js:tracked'));
+  let staged;view.fileActions.stageFiles=paths=>{staged=paths;};find(lastPage,'stage-group-unstaged').attrs.on_click[0]({},h.cx);assert.equal(staged.length,1000);
+  view.history=Array.from({length:500},(_,i)=>({fullHash:String(i)}));view.graphRow=row=>element(row.fullHash);
+  const history=find(view.graphView(c.theme(),true),'git-history-rows').attrs.virtual;
+  assert.equal(history.render({start:400,end:410})[0].id,'400');
+});
+
+test('History reuses unchanged committed data but reloads when HEAD or upstream status changes', async () => {
+  const h=harness(),c=h.context,view=changes(h);let reads=0;
+  Object.assign(view,{root:'/repo',on:null,context:JSON.stringify({cwd:'/repo',on:null}),hasHead:true,head:'a'.repeat(40)});
+  c.exec=async(_program,args)=>{if(args.includes('log'))reads++;return {code:0,stdout:''};};
+  await view.loadHistory(view.context);await view.loadHistory(view.context);assert.equal(reads,1);
+  view.head='b'.repeat(40);await view.loadHistory(view.context);assert.equal(reads,2);
+  view.sync={upstream:'origin/main',ahead:1};await view.loadHistory(view.context);assert.equal(reads,3);
+  c.exec=async(_program,args)=>{if(args.includes('log'))reads++;return {code:0,stdout:args.includes('@{upstream}')?'c'.repeat(40):''};};
+  await view.loadHistory(view.context);assert.equal(reads,4);
+});
+
+test('large-tree inline input keeps handlers outside native layout and does not open a file on click', () => {
+  const h=harness(),c=h.context;h.cx.spawn=()=>{};
+  load(c,'files-browser/gitState.js',['gitState','fileState']);load(c,'files-browser/fileIcons.js',['fileIcon']);load(c,'files-browser/main.js',['Files']);
+  const view=new c.Files();view.init({},h.cx);view.loading=false;
+  view.entries=new Map([['',Array.from({length:5000},(_,i)=>({name:`file-${i}.js`,dir:false}))]]);
+  view.tools={mode:'inline',operationName:'new_file',inlineParent:'',error:'Invalid name',inlineRow:()=>element('inline-field').on_click(()=>{}),context:el=>el,contextArea:el=>el};
+  const tree=view.render(h.cx),list=find(tree,'files-tree-rows'),native=list.attrs.virtual;
+  renderingRows=true;const visible=native.render({start:0,end:20});renderingRows=false;
+  assert.equal(visible[0].id,'inline-field');assert.equal(native.sizes[0],64);assert.equal(visible.length,20);
+  let opened=false;view.show=()=>{opened=true;};list.attrs.on_item_click[0](native.key(0),h.cx);assert.equal(opened,false);
 });

@@ -1,5 +1,5 @@
 import { View, div, svg, PathBuilder } from "gpui-kit";
-import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, Tabs, Tab, Button, Checkbox, Popover } from "gpui-base";
+import { v_flex, h_flex, TextareaState, Textarea, Scrollbar, Tabs, Tab, Button, Checkbox, Popover, v_virtual_list, ScrollHandle, VirtualListScrollHandle } from "gpui-base";
 import { spaces, panes, focused, exec, watchFolder, theme, settings, run, shared, setShared, appHome, readTextFile, props } from "herdr";
 import { GRAPH_ARGS, HISTORY_ARGS, GRAPH_LIMIT, GRAPH_ROW_HEIGHT, graphRows, COMMIT_FORMAT, commitDetail, refLabels, shortAge } from "./graph.js";
 import { GitToolbar, worktreeRows } from "./gitToolbar.js";
@@ -48,6 +48,7 @@ export default class Changes extends View {
     if (options?.prSettings) { this.prSettings = new PrSettings(options); return; }
     if (options?.githubPreview) { this.githubPreview = new GithubPreview(options, cx); return; }
     this.drafts = new Map(); this.repositories = new Repositories(this, workspace, cx);
+    this.changeScroll = ScrollHandle.new(); this.historyScroll = VirtualListScrollHandle.new(); this.graphScroll = VirtualListScrollHandle.new();
     this.view = "changes"; this.graph = []; this.graphError = null; this.selectedCommit = null; this.detail = null; this.detailError = null;
     this.history = []; this.historyError = null; this.historyLoading = false;
     this.files = []; this.message = ""; this.messageRevision = 0; this.generator = new CommitGenerator(this, key, cx); this.handle = cx.focus_handle();
@@ -69,28 +70,40 @@ export default class Changes extends View {
   watch(root, cx) {
     if (this.on || this.watched === root) return;
     this.watched = root;
+    const version = this.watchVersion = (this.watchVersion || 0) + 1;
     cx.spawn(async (cx) => {
       try {
-        while (this.watched === root) {
+        while (this.watchVersion === version && this.watched === root) {
           await watchFolder(root);
-          if (this.watched === root) this.refresh(cx);
+          if (this.watchVersion === version && this.watched === root) this.scheduleRefresh(cx);
         }
-      } catch { this.watched = null; }
+      } catch { if (this.watchVersion === version) this.watched = null; }
     });
   }
 
+  scheduleRefresh(cx) {
+    const sequence = this.refreshScheduled = (this.refreshScheduled || 0) + 1;
+    cx.timer.after(120, cx => { if (sequence === this.refreshScheduled) this.refresh(cx); });
+  }
+
   refresh(cx) {
-    if (this.loading || this.busy) return;
+    if (this.busy) return;
     const { cwd, on } = location(), context = key();
     const changedContext = context !== this.context;
+    if (this.loading && !changedContext) { this.refreshAgain = true; return; }
+    const version = this.refreshVersion = (this.refreshVersion || 0) + 1;
+    const current = () => version === this.refreshVersion && key() === context;
+    this.refreshAgain = false;
     if (context !== this.context) {
       if (this.root) this.drafts.set(draftKey(this.root, this.on), this.message);
       this.selectedCommit = null; this.detail = null; this.detailError = null;
       this.graph = []; this.graphError = null; this.graphContext = null; this.graphLoading = false;
+      this.graphVersion = (this.graphVersion || 0) + 1;
+      this.graphTextContext = null; this.historySignature = null;
       this.history = []; this.historyError = null; this.historyLoading = false; this.historyVersion = (this.historyVersion ?? 0) + 1;
       this.context = context; this.root = null; this.files = []; this.open = null;
       this.branch = null; this.head = ""; this.sync = null; this.lastCommit = null; this.undoOpen = false; this.undoSnapshot = null; this.gitToolbar.reset();
-      this.fileActions.reset(); this.stash.reset(); this.github.reset(); this.historyPath = null; this.collapsed = {};
+      this.fileActions.reset(); this.stash.reset(); this.github.reset(); this.historyPath = null; this.collapsed = {}; this.changePage = 0;
       this.message = ""; this.messageRevision++; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.limited = false;
     }
     if (!cwd) return;
@@ -99,7 +112,7 @@ export default class Changes extends View {
     cx.spawn(async (cx) => {
       try {
         const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
-        if (key() !== context) return;
+        if (!current()) return;
         if (top.code !== 0) {
           this.selectedCommit = null; this.detail = null; this.graph = []; this.graphError = null; this.history = []; this.historyError = null; this.root = null; this.branch = null; this.head = ""; this.sync = null; this.lastCommit = null; this.undoOpen = false; this.undoSnapshot = null; this.files = []; this.open = null;
           this.error = this.repositories.rows.length > 1 ? "Select a repository above" : "No Git repository found in this folder";
@@ -108,13 +121,14 @@ export default class Changes extends View {
         }
         const root = top.stdout.trim(), git = (args) => exec("git", [...READ, ...args], { cwd: root, on });
         let mainWorktree = this.mainWorktree;
-        if (changedContext) {
-          const worktrees = await git(["worktree", "list", "--porcelain", "-z"]);
-          mainWorktree = worktrees.code === 0 ? worktreeRows(worktrees.stdout).find(row => row.main)?.root : null;
-        }
-        const status = await git(["status", "--porcelain=v1", "-z", "--branch", "--no-renames", "--untracked-files=all"]);
+        const [status, head, branch, worktrees] = await Promise.all([
+          git(["status", "--porcelain=v1", "-z", "--branch", "--no-renames", "--untracked-files=all"]),
+          git(["rev-parse", "--verify", "HEAD"]), git(["symbolic-ref", "--quiet", "HEAD"]),
+          changedContext ? git(["worktree", "list", "--porcelain", "-z"]) : null,
+        ]);
+        if (!current()) return;
+        if (worktrees) mainWorktree = worktrees.code === 0 ? worktreeRows(worktrees.stdout).find(row => row.main)?.root : null;
         if (status.code !== 0) throw new Error(status.stderr);
-        const head = await git(["rev-parse", "--verify", "HEAD"]);
         const hash = head.code === 0 ? head.stdout.trim() : "";
         let lastCommit = this.lastCommit?.hash === hash ? this.lastCommit : null;
         if (hash && !lastCommit) {
@@ -124,7 +138,6 @@ export default class Changes extends View {
             if (id === hash) lastCommit = { hash, parents: parents.split(" ").filter(Boolean), message, subject: message.split("\n", 1)[0] };
           }
         }
-        const branch = await git(["symbolic-ref", "--quiet", "HEAD"]);
         if (branch.code !== 0 && branch.code !== 1) throw new Error(branch.stderr || "Cannot read current branch");
         const stats = {};
         const results = head.code === 0 ? [await git(["diff", "HEAD", "--numstat", "-z", "--no-renames"])] : [await git(["diff", "--cached", "--numstat", "-z", "--no-renames"]), await git(["diff", "--numstat", "-z", "--no-renames"])];
@@ -146,7 +159,7 @@ export default class Changes extends View {
           const stat = stats[path] ?? { add: 0, del: 0 };
           files.push({ path, status: s, fresh, indexStatus: xy[0], worktreeStatus: xy[1], staged: !fresh && xy[0] !== " " && xy[0] !== "?", unstaged: fresh || xy[1] !== " ", ...stat });
         }
-        if (key() !== context) return;
+        if (!current()) return;
         this.root = root; this.mainWorktree = mainWorktree; this.on = on; this.hasHead = head.code === 0; this.files = files; this.limited = entries.length > 1000; this.error = null;
         this.branch = branch.code === 0 ? branch.stdout.trim().replace(/^refs\/heads\//, "") : null;
         if (this.head !== hash) { this.undoOpen = false; this.undoSnapshot = null; }
@@ -164,8 +177,11 @@ export default class Changes extends View {
         if (this.view === "stashes") await this.stash.refresh();
         if (this.view === "github") this.github.enter(cx);
         if (this.open && !files.some((f) => f.path === this.open)) this.open = null;
-      } catch (e) { if (key() === context) this.error = String(e); }
-      finally { this.loading = false; cx.notify(); }
+      } catch (e) { if (current()) this.error = String(e); }
+      finally { if (version === this.refreshVersion) {
+        this.loading = false; cx.notify();
+        if (this.refreshAgain) { this.refreshAgain = false; this.scheduleRefresh(cx); }
+      } }
     });
   }
 
@@ -177,7 +193,9 @@ export default class Changes extends View {
       const result = await exec("git", [...READ, ...GRAPH_ARGS], { cwd: this.root, on: this.on });
       if (context !== key() || version !== this.graphVersion) return;
       if (result.code !== 0) throw new Error(result.stderr || "Cannot load Git history");
-      this.graph = graphRows(result.stdout);
+      if (this.graphText !== result.stdout || this.graphTextContext !== context) {
+        this.graph = graphRows(result.stdout); this.graphText = result.stdout; this.graphTextContext = context;
+      }
     } catch (error) { if (context === key() && version === this.graphVersion) this.graphError = String(error); }
     finally { if (this.graphContext === context && version === this.graphVersion) this.graphLoading = false; }
   }
@@ -189,6 +207,10 @@ export default class Changes extends View {
     try {
       if (!this.hasHead) { this.history = []; return; }
       const options = { cwd: this.root, on: this.on }, paths = path ? ["--", path] : [];
+      const remote = tracked ? await exec("git", [...READ, "rev-parse", "--verify", "@{upstream}"], options) : null;
+      if (context !== key() || version !== this.historyVersion || head !== this.head) return;
+      const signature = JSON.stringify([context, head, path, this.sync, remote?.stdout]);
+      if (signature === this.historySignature && !this.historyError) return;
       const result = await exec("git", [...READ, ...HISTORY_ARGS.map(arg => arg === "HEAD" ? head : arg), ...paths], options);
       if (context !== key() || version !== this.historyVersion || head !== this.head) return;
       if (result.code !== 0) throw new Error(result.stderr || "Cannot load Git history");
@@ -204,14 +226,14 @@ export default class Changes extends View {
           }
         }
       } catch { /* History stays readable when upstream status is unavailable. */ }
-      if (context === key() && version === this.historyVersion && head === this.head) this.history = rows;
+      if (context === key() && version === this.historyVersion && head === this.head) { this.history = rows; this.historySignature = signature; }
     } catch (error) { if (context === key() && version === this.historyVersion) this.historyError = String(error); }
     finally { if (version === this.historyVersion) this.historyLoading = false; }
   }
 
   showFileHistory(path, cx) {
     if (!this.root || this.context !== key()) return;
-    this.historyPath = path; this.history = []; this.view = "history"; this.closeDetail(cx);
+    this.historyPath = path; this.history = []; this.historySignature = null; this.view = "history"; this.closeDetail(cx);
     const context = this.context;
     cx.spawn(async cx => { await this.loadHistory(context); cx.notify(); }); cx.notify();
   }
@@ -295,7 +317,7 @@ export default class Changes extends View {
           .when(detail.files.length > 1000, e => e.child(div().text_color(t.muted).child("Showing the first 1,000 files")))));
   }
 
-  graphRow(row, width, t) {
+  graphRow(row, width, t, interactive = true) {
     const height = GRAPH_ROW_HEIGHT, lane = div().w(width).h(height).flex_none().relative();
     const colors = [t.ansi4, t.ansi2, t.ansi5, t.ansi3, t.ansi6];
     for (const edge of width ? row.edges : []) {
@@ -307,10 +329,10 @@ export default class Changes extends View {
     }
     lane.child(div().absolute().left(row.lane * 12 + 5).top(height / 2 - 3).size(6).rounded_full().bg(colors[row.color % colors.length]));
     const merge = row.parents.split(" ").length > 1;
-    return Button.new(`commit-${row.fullHash}`).h_flex().w_full().h(height).flex_none().items_center().gap(8).px(8).text_size(12).font_normal()
+    return (interactive ? Button.new(`commit-${row.fullHash}`).h_flex() : h_flex().id(`commit-${row.fullHash}`)).w_full().h(height).flex_none().items_center().gap(8).px(8).text_size(12).font_normal()
       .bg(this.selectedCommit === row.fullHash ? t.selected : t.background).cursor_pointer()
       .accessibility_label(`Show commit ${row.hash}: ${row.subject}${!width && row.unpushed ? ` · Unpushed to ${row.upstream}` : ""}`).tooltip(`${row.subject}\n${row.hash} · ${row.author} · ${row.age}${row.refs ? "\n" + row.refs : ""}${!width && row.upstream ? `\n${row.unpushed ? "Unpushed to" : "On"} ${row.upstream} · last fetched refs` : ""}`)
-      .hover(s => s.bg(t.hover)).on_click((_e, cx) => this.pickCommit(row, cx))
+      .hover(s => s.bg(t.hover)).when(interactive, el => el.on_click((_e, cx) => this.pickCommit(row, cx)))
       .when(width > 0, el => el.child(lane))
       .child(h_flex().flex_1().min_w(0).items_center().gap(6)
         .when(width > 0 && Boolean(row.refs), el => el.child(h_flex().flex_none().max_w("55%").min_w(0).overflow_hidden().gap(4).items_center()
@@ -335,6 +357,7 @@ export default class Changes extends View {
     const error = history ? this.historyError : this.graphError, loading = history ? this.historyLoading : this.graphLoading;
     const id = history ? "git-history" : "git-graph";
     const width = history ? 0 : Math.max(38, ...rows.map(row => row.lanes * 12 + 12));
+    const context = this.context, scroll = history ? this.historyScroll : this.graphScroll;
     const empty = error || this.error || (!this.root ? "Open a Git folder" : loading || this.loading ? "Loading history…" : "No commits yet");
     return v_flex().flex_1().min_h(0)
       .when(history && Boolean(this.historyPath), el => el.child(h_flex().h(32).px(14).gap(8).flex_none().items_center().border_b(1).border_color(t.border)
@@ -352,13 +375,28 @@ export default class Changes extends View {
               .child(div().w(100).flex_none().child("Author"))
               .child(div().w(66).flex_none().child("Commit")))
             .child(div().flex_1().min_h(0).relative()
-              .child(v_flex().id(`${id}-list`).absolute().inset_0().overflow_y_scroll()
+              .child(v_flex().id(`${id}-list`).absolute().inset_0().when(rows.length <= 80, el => el.overflow_y_scroll())
                 .when(!history && this.files.length > 0, el => el.child(Button.new("graph-uncommitted").h_flex().h(GRAPH_ROW_HEIGHT).px(14).gap(8).flex_none().items_center().bg("#00000000").text_size(12).text_color(t.muted)
                   .accessibility_label(`Show ${this.files.length} uncommitted changes`).hover(e => e.bg(t.hover)).on_click((_e, cx) => this.selectView("changes", cx))
                   .child(svg("mods/changes-graph/changes.svg").size(14)).child(`Uncommitted changes (${this.files.length})`)))
-                .children(rows.map(row => this.graphRow(row, width, t)))
+                .when(rows.length <= 80, el => el.children(rows.map(row => this.graphRow(row, width, t))))
+                .when(rows.length > 80, el => el.child(v_flex().flex_1().min_h(0).track_focus(this.handle)
+                  .on_key_down((e, cx) => {
+                    if (this.context !== context || !["up", "down", "enter"].includes(e.key)) return;
+                    let at = rows.findIndex(row => row.fullHash === this.selectedCommit);
+                    if (e.key !== "enter") at = Math.max(0, Math.min(rows.length - 1, at + (e.key === "up" ? -1 : 1)));
+                    if (rows[at]) { scroll.scroll_to_item(at); this.pickCommit(rows[at], cx); }
+                    cx.stop_propagation();
+                  })
+                  .child(v_virtual_list(`${id}-rows`, rows.length, GRAPH_ROW_HEIGHT, i => JSON.stringify([context, rows[i].fullHash]),
+                    range => rows.slice(range.start, range.end).map(row => this.graphRow(row, width, t, false))).flex_1().min_h(0).track_scroll(scroll)
+                    .on_item_click((key, cx) => {
+                      if (this.context !== context) return;
+                      const row = rows.find(row => JSON.stringify([context, row.fullHash]) === key);
+                      if (row) { this.handle.focus(); this.pickCommit(row, cx); }
+                    }))))
                 .when(!rows.length, el => el.child(div().p(14).text_size(12).text_color(t.muted).child(empty))))
-              .child(Scrollbar.vertical(`${id}-list`).absolute().inset_0()))))
+              .child(Scrollbar.vertical(rows.length > 80 ? `${id}-rows` : `${id}-list`).absolute().inset_0()))))
         .child(Scrollbar.horizontal(`${id}-x`).absolute().inset_0()))
       .when(Boolean(this.selectedCommit), el => el.child(this.commitView(t)))
       .when(Boolean(error) && rows.length > 0, el => el.child(div().px(14).py(8).text_size(12).text_color(t.ansi1).child(error)));
@@ -470,34 +508,52 @@ export default class Changes extends View {
     const snapshot = this.fileActions.snapshot(), files = this.files.slice(0, 1000);
     const groups = [["staged", "Staged changes", files.filter(file => file.staged && file.status !== "U")],
       ["unstaged", "Changes", files.filter(file => file.unstaged ?? !file.staged)]];
-    return v_flex().gap(2)
-      .when(this.files.some(file => file.status === "U"), el => el.child(h_flex().px(8).py(10).gap(8).text_size(12).text_color(t.ansi1)
+    const items = groups.filter(([, , entries]) => entries.length).flatMap(([mode, title, entries]) => [
+      { mode, title, entries }, ...(this.collapsed[mode] ? [] : entries.map(file => ({ mode, file }))),
+    ]);
+    // Lazy rows cannot own checkbox/menu handlers in this Herdr version.
+    const paged = this.files.length > 80, filesOnPages = items.filter(item => item.file), pages = paged ? Math.max(1, Math.ceil(filesOnPages.length / 50)) : 1;
+    this.changePage = Math.max(0, Math.min(pages - 1, this.changePage || 0));
+    const pageRows = filesOnPages.slice(this.changePage * 50, (this.changePage + 1) * 50);
+    const visible = !paged ? items : items.filter(item => item.file ? pageRows.includes(item) : this.collapsed[item.mode] || pageRows.some(row => row.mode === item.mode));
+    const rendered = visible.map(item => this.changeRow(item, t, cx, disabled, snapshot));
+    const page = (delta, cx) => { this.changePage += delta; this.changeScroll.scroll_to_item(0); cx.notify(); };
+    return v_flex().gap(2).when(paged, el => el.flex_1().min_h(0)).when(!paged, el => el.flex_none())
+      .when(this.files.some(file => file.status === "U"), el => el.child(h_flex().flex_none().px(8).py(10).gap(8).text_size(12).text_color(t.ansi1)
         .child(svg("mods/changes-graph/warning.svg").size(14).flex_none())
         .child(div().child("Resolve conflicts in your editor, then stage the resolved files before committing."))))
-      .children(groups.filter(([, , entries]) => entries.length).map(([mode, title, entries]) => v_flex().flex_none()
-        .child(h_flex().h(30).flex_none().items_center().gap(4)
-          .child(Button.new(`toggle-${mode}`).h_flex().flex_1().min_w(0).h(28).px(8).gap(7).items_center().justify_start().bg("#00000000").text_size(11).font_normal().text_color(t.muted)
-            .accessibility_label(`${this.collapsed[mode] ? "Expand" : "Collapse"} ${title}`).focus(el => el.border_color(t.accent))
-            .on_click((_e, cx) => { this.collapsed[mode] = !this.collapsed[mode]; cx.notify(); })
-            .child(svg(`mods/changes-graph/${this.collapsed[mode] ? "expand" : "chevron"}.svg`).size(10))
-            .child(div().font_semibold().child(title)).child(div().child(String(entries.length))))
-          .child(Button.new(`stage-group-${mode}`).size(28).flex_none().flex().items_center().justify_center().rounded(4).bg("#00000000").text_color(t.muted)
-            .disabled(disabled).accessibility_label(mode === "staged" ? "Unstage all staged files" : "Stage all working changes").tooltip(mode === "staged" ? "Unstage all" : "Stage all")
-            .hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent)).on_click((_e, cx) => this.fileActions.stageFiles(entries.map(file => file.path), mode !== "staged", cx, snapshot))
-            .child(svg(`mods/changes-graph/${mode === "staged" ? "minus" : "plus"}.svg`).size(13))))
-        .when(!this.collapsed[mode], el => el.children(entries.map(file => {
-          const parts = file.path.split("/"), name = parts.pop(), id = `${mode}-${file.path}:${file.fresh ? "untracked" : "tracked"}`;
-          const status = (mode === "staged" ? file.indexStatus : file.worktreeStatus)?.trim().replace("?", "A") || file.status;
-          const row = h_flex().id(`change-${id}`).h(GRAPH_ROW_HEIGHT).flex_none().px(8).gap(8).items_center().rounded(4).cursor_pointer()
-            .bg(this.open === file.path && this.openMode === mode ? t.selected : "#00000000").hover(el => el.bg(t.hover))
-            .on_click((_e, cx) => this.openFile(file, null, cx, { diffMode: mode }))
-            .child(div().w(12).flex_none().text_size(11).text_color(status === "A" ? t.ansi2 : status === "D" || status === "U" ? t.ansi1 : t.ansi3).child(status))
-            .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(status === "D" ? t.muted : t.foreground).when(status === "D", el => el.line_through()).tooltip(file.path).child(name))
-            .child(div().max_w("45%").min_w(0).truncate().text_size(11).text_color(t.muted).tooltip(parts.join("/")).child(parts.join("/")))
-            .child(this.fileActions.rowMenu(file, mode, t, cx, disabled))
-            .child(this.fileCheckbox(`select-file-${id}`, mode === "staged", `${mode === "staged" ? "Unstage" : "Stage"} ${file.path}`, (checked, cx) => this.fileActions.stageFiles([file.path], checked, cx, snapshot), t, false, disabled || file.status === "U"));
-          return this.fileActions.row(file, row, t, cx, mode);
-        })))));
+      .when(!paged, el => el.children(rendered))
+      .when(paged, el => el
+        .child(v_flex().id("changes-rows").flex_1().min_h(0).overflow_y_scrollbar().track_scroll(this.changeScroll).children(rendered))
+        .child(h_flex().h(34).flex_none().items_center().justify_between().gap(8).px(8).border_t(1).border_color(t.border)
+          .child(Button.new("changes-previous").h(28).px(8).text_size(12).bg(t.raised).text_color(t.foreground).rounded(4).disabled(this.changePage === 0).accessibility_label("Previous changes page").on_click((_e, cx) => page(-1, cx)).child("Previous"))
+          .child(div().text_size(11).text_color(t.muted).child(`Page ${this.changePage + 1} of ${pages}`))
+          .child(Button.new("changes-next").h(28).px(8).text_size(12).bg(t.raised).text_color(t.foreground).rounded(4).disabled(this.changePage + 1 >= pages).accessibility_label("Next changes page").on_click((_e, cx) => page(1, cx)).child("Next"))));
+  }
+
+  changeRow(item, t, cx, disabled, snapshot) {
+    const { mode, title, entries, file } = item;
+    if (!file) return h_flex().h(30).flex_none().items_center().gap(4)
+      .child(Button.new(`toggle-${mode}`).h_flex().flex_1().min_w(0).h(28).px(8).gap(7).items_center().justify_start().bg("#00000000").text_size(11).font_normal().text_color(t.muted)
+        .accessibility_label(`${this.collapsed[mode] ? "Expand" : "Collapse"} ${title}`).focus(el => el.border_color(t.accent))
+        .on_click((_e, cx) => { this.collapsed[mode] = !this.collapsed[mode]; cx.notify(); })
+        .child(svg(`mods/changes-graph/${this.collapsed[mode] ? "expand" : "chevron"}.svg`).size(10))
+        .child(div().font_semibold().child(title)).child(div().child(String(entries.length))))
+      .child(Button.new(`stage-group-${mode}`).size(28).flex_none().flex().items_center().justify_center().rounded(4).bg("#00000000").text_color(t.muted)
+        .disabled(disabled).accessibility_label(mode === "staged" ? "Unstage all staged files" : "Stage all working changes").tooltip(mode === "staged" ? "Unstage all" : "Stage all")
+        .hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent)).on_click((_e, cx) => this.fileActions.stageFiles(entries.map(file => file.path), mode !== "staged", cx, snapshot))
+        .child(svg(`mods/changes-graph/${mode === "staged" ? "minus" : "plus"}.svg`).size(13)));
+    const parts = file.path.split("/"), name = parts.pop(), id = `${mode}-${file.path}:${file.fresh ? "untracked" : "tracked"}`;
+    const status = (mode === "staged" ? file.indexStatus : file.worktreeStatus)?.trim().replace("?", "A") || file.status;
+    const row = h_flex().id(`change-${id}`).h(GRAPH_ROW_HEIGHT).flex_none().px(8).gap(8).items_center().rounded(4).cursor_pointer()
+      .bg(this.open === file.path && this.openMode === mode ? t.selected : "#00000000").hover(el => el.bg(t.hover))
+      .on_click((_e, cx) => this.openFile(file, null, cx, { diffMode: mode }))
+      .child(div().w(12).flex_none().text_size(11).text_color(status === "A" ? t.ansi2 : status === "D" || status === "U" ? t.ansi1 : t.ansi3).child(status))
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(status === "D" ? t.muted : t.foreground).when(status === "D", el => el.line_through()).tooltip(file.path).child(name))
+      .child(div().max_w("45%").min_w(0).truncate().text_size(11).text_color(t.muted).tooltip(parts.join("/")).child(parts.join("/")))
+      .child(this.fileActions.rowMenu(file, mode, t, cx, disabled))
+      .child(this.fileCheckbox(`select-file-${id}`, mode === "staged", `${mode === "staged" ? "Unstage" : "Stage"} ${file.path}`, (checked, cx) => this.fileActions.stageFiles([file.path], checked, cx, snapshot), t, false, disabled || file.status === "U"));
+    return this.fileActions.row(file, row, t, cx, mode);
   }
 
   commit(cx) {
@@ -602,7 +658,7 @@ export default class Changes extends View {
       .when(this.view === "github", el => el.child(this.github.render(t, cx)))
       .when(this.view === "changes", panel => panel
         .child(div().flex_1().min_h(0).relative()
-          .child(v_flex().id("changes-list").absolute().inset_0().overflow_y_scroll().px(6).pb(8)
+          .child(v_flex().id("changes-list").absolute().inset_0().when(this.files.length <= 80, el => el.overflow_y_scroll()).px(6).pb(8)
             .child(this.changeRows(t, cx, disabled))
             .when(!this.files.length, el => el.child(v_flex().px(16).py(32).gap(8).items_center().text_color(t.muted)
               .when(Boolean(this.root && !this.error && !this.loading), el => el.child(svg("mods/workspace-chrome/check.svg").size(24)))
@@ -610,7 +666,7 @@ export default class Changes extends View {
               .when(Boolean(this.root && !this.error && !this.loading), el => el.child(div().text_size(12).child(`${name} has a clean working tree.`))
                 .child(Button.new("clean-view-history").h(28).px(10).rounded(5).border_1().border_color(t.border).bg(t.raised).text_size(12).text_color(t.foreground)
                   .accessibility_label("View history").on_click((_e, cx) => this.selectView("history", cx)).child("View history"))))))
-          .child(Scrollbar.vertical("changes-list").absolute().inset_0()))
+          .when(this.files.length <= 80, el => el.child(Scrollbar.vertical("changes-list").absolute().inset_0())))
         .when(this.limited, el => el.child(div().px(14).py(6).text_size(11).text_color(t.muted).child("Showing the first 1,000 changed files"))))
       .when(Boolean(this.note), el => el.child(div().px(14).py(8).text_size(12).text_color(t.ansi1).child(this.note)))
       .when(this.view === "changes", panel => panel

@@ -220,6 +220,8 @@ test('preview refresh keeps its detail tab and rejects a late selection', async 
   let complete;
   h.setResponse((_action,r)=>r.number===1?new Promise(resolve=>{complete=resolve;}):({...pr(),number:2,title:'Second PR'}));
   preview.refresh(h.cx);
+  const loadingTree=preview.render(h.t,h.cx), text=node=>typeof node==='string'?node:(node?.nodes||[]).map(text).join(' ');
+  assert.ok(find(loadingTree,'github-pr-header'));assert.doesNotMatch(text(loadingTree),/Loading details/);
   h.state.set('github.preview.tab',{...h.state.get('github.preview.tab'),number:2});
   preview.render(h.t,h.cx);complete(pr());await h.flush();
   assert.equal(preview.pr.number,2);assert.equal(preview.detailSection,'overview');

@@ -57,9 +57,11 @@ export class Documents {
         if (input.value() !== data.draft && !doc.normalizedCRLF) { input.release(); throw new Error("This Herdr editor changes the original text. Editing was cancelled."); }
         this.open.set(doc.id, doc);
         input.on("change", (_e, cx) => {
+          const wasDirty = doc.dirty;
           doc.dirty = rawText(input.value(), doc) !== doc.base; doc.change = (doc.change || 0) + 1;
           const change = doc.change; this.publish(doc);
-          cx.timer.after(200, cx => { if (change === doc.change) this.checkpoint(doc, cx); }); cx.notify();
+          cx.timer.after(200, cx => { if (change === doc.change) this.checkpoint(doc, cx); });
+          if (wasDirty !== doc.dirty) cx.notify();
         });
       }
       this.current = doc; this.owner.mode = "source";
@@ -68,8 +70,10 @@ export class Documents {
     });
   }
   publish(doc) {
+    const owners = shared("noodle.documents") || {}, previous = owners[doc.id];
+    if (previous?.key === this.owner.selectionKey && previous.root === doc.root && previous.path === doc.path && previous.dirty === doc.dirty) return;
     const pane = panes().find(p => p.mod === "file-editor" && p.props?.selectionKey === this.owner.selectionKey) || panes().find(p => p.mod === "file-editor" && `file-editor.${p.tab}` === this.owner.selectionKey);
-    setShared("noodle.documents", { ...(shared("noodle.documents") || {}), [doc.id]: { key: this.owner.selectionKey, pane: pane?.pane, root: doc.root, path: doc.path, dirty: doc.dirty } });
+    setShared("noodle.documents", { ...owners, [doc.id]: { key: this.owner.selectionKey, pane: pane?.pane, root: doc.root, path: doc.path, dirty: doc.dirty } });
   }
   async flush(doc) {
     if (doc.flushing) await doc.flushing;
