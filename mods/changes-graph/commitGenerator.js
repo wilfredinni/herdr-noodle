@@ -154,10 +154,10 @@ export class CommitGenerator {
         .child(this.option("generation-refresh", "Refresh connections", cx => this.sync(cx, true), t).disabled(this.loading)));
   }
 
-  render(t, cx) {
+  render(t, cx, options = {}) {
     this.sync(cx);
     const available = this.enabled(), model = this.model(), connection = this.connection();
-    const hasChanges = Boolean(model && this.owner.root && this.owner.context === this.key() && this.owner.files.length);
+    const hasChanges = options.ready ?? Boolean(model && this.owner.root && this.owner.context === this.key() && this.owner.files.length);
     const ready = available && hasChanges;
     const selected = selectedPaths(this.owner.files).length;
     const scope = selected && selected < this.owner.files.length ? `${selected} selected files` : "all changed files";
@@ -166,10 +166,10 @@ export class CommitGenerator {
       .accessibility_label("Choose generation connection and model").tooltip(model ? `${connection.name} · ${model.name}` : "Choose connection and model")
       .child(svg("mods/changes-graph/chevron.svg").size(9));
     return h_flex().id("generate-split-button").flex_none().h(28).items_center().rounded(5).border_1().border_color(t.border).bg(t.raised)
-      .child(Button.new("generate-commit-message").h(26).px(9).h_flex().items_center().gap(6).rounded_l(4).bg("#00000000")
+      .child(Button.new(options.id || "generate-commit-message").h(26).px(9).h_flex().items_center().gap(6).rounded_l(4).bg("#00000000")
         .border_1().border_color("#00000000").font_normal().text_size(12).text_color(hasChanges ? t.foreground : t.dim)
-        .disabled(!ready).hover(s => s.bg(t.hover)).focus(s => s.border_color(t.accent)).accessibility_label("Generate commit message")
-        .tooltip(`Generate a message for ${scope}`).on_click((_e, cx) => this.generate(cx))
+        .disabled(!ready).hover(s => s.bg(t.hover)).focus(s => s.border_color(t.accent)).accessibility_label(options.label || "Generate commit message")
+        .tooltip(options.label || `Generate a message for ${scope}`).on_click((_e, cx) => options.generate ? options.generate(cx) : this.generate(cx))
         .child(svg(this.running ? "mods/workspace-chrome/spinner.svg" : "mods/changes-graph/spark.svg").id(this.running ? "commit-generation-spinner" : "commit-generation-icon").size(13).when(this.running, el => el.spin(900))).child("Generate"))
       .child(div().w(1).h(12).flex_none().bg(t.border))
       .child(Popover.new("commit-generation-picker").open(this.open).anchor("bottom_right").track_focus(this.focus)

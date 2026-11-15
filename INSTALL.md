@@ -10,8 +10,8 @@ Follow the target computer's Herdr `AGENTS.md`. Use `herdr-app --help` to locate
 | Git and Python 3.9+ | Git panels, file operations, editing and recovery drafts |
 | ripgrep (`rg`) | Quick Open and content search |
 | `bash` and `bat` | Syntax colors in Diff, Source and File hunks; previews remain readable without them |
-| GitHub CLI (`gh`), signed in by the user | Optional PR / CI information and failure logs |
-| Supported, signed-in agent CLIs | Optional usage meters and commit-message generation |
+| GitHub CLI (`gh`), signed in by the user | Optional GitHub PRs, creation, reviews, workflows and logs |
+| Supported, signed-in agent CLIs | Optional usage meters and commit/PR generation |
 
 Run `herdr-app --version`, `git --version`, `python3 --version` and `rg --version` in the environment Herdr uses. Python helpers use only the standard library; there are no pip packages or Node dependencies to install. Node is needed only to run the development tests.
 
@@ -56,6 +56,8 @@ herdr-app status
 ```
 
 Check that the Settings thumbnail exists and every helper file was copied. In a disposable project, open a local text file from Files, edit and save with Cmd+S / Ctrl+S, close and reopen it, and verify the exact saved text. Try Quick Open, content search and a Changes diff with Source and Review. Confirm that `herdr-app status` reports no errors after these interactions. Initial `check` success alone does not validate asynchronous helpers or saving. Do not exercise commit, discard, stash or branch mutations on the user's working repositories as an installation test.
+
+If `gh` is installed and signed in, open GitHub and check Pull requests and Workflows. New PR and its instructions dialog can be inspected without submitting. Do not click Generate or Create PR as an installation test; fixture tests cover those paths without provider calls or GitHub writes. PR creation/generation use a local checkout and private request files under `data/noodle/github/`.
 
 The standard editor needs no native patch for editing, syntax highlighting or saving. Git gutter marks **inside the writable editor** appear only when Herdr exposes `EditorState.set_gutter_marks`; their absence does not affect Source preview indicators. See [native/README.md](native/README.md) for the optional development patches. Do not apply patches or rebuild Herdr during a normal layout installation.
 

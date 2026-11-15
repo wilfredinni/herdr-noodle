@@ -2,8 +2,8 @@
 
 The stable connection registry is `connections.js`, independent of the status bar.
 Each connection has an ID, driver and CLI auth reference. `readConnection` reads usage;
-Commit generation separately discovers authenticated Codex/OpenCode models through those
-same installed CLI sign-ins and revalidates its selected provider and model before sending a diff. A usage reading does not grant generation access.
+Commit and PR generation separately discover authenticated Codex/OpenCode models through those
+same installed CLI sign-ins and revalidate the selected provider and model before sending a diff. PR generation also sends the chosen template and PR instructions, using committed branch changes against the selected base. A usage reading does not grant generation access.
 OpenCode Go quotas use the native read-only `/api/experimental/usage/limits` endpoint
 for the focused project location. An existing Go API key alone can return `data: null`;
 the CLI must have an OpenCode Console workspace sign-in with account metadata.
