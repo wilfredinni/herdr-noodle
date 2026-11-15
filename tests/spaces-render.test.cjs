@@ -28,6 +28,7 @@ function harness() {
     setAgentOrder: order => { state.order = Array.from(order); },
     shared: key => key === 'space.colors' ? state.colors : null,
     run: (command, args) => state.commands.push({ command, args }), theme: () => ({ dim: '#aaa', muted: '#aaa' }),
+    props: () => state.footer ? { footer: true } : {}, updates: () => ({ app: { ready: state.updateReady } }),
     layout: () => ({}), Input: { new: element },
   });
   vm.runInContext(fs.readFileSync(__dirname + '/../mods/spaces-paths/agentTree.js', 'utf8').replace(/export function /g, 'function '), context);
@@ -160,4 +161,21 @@ test('space colors remain stable across selection and order, and honor saved col
   assert.equal(avatar.attrs.text_color[0], '#ffffff');
   h.state.colors.local = 'ansi6';
   assert.equal(find(h.render(), 'space-avatar-local').attrs.bg[0], '#22a99a');
+});
+
+
+test('footer keeps both icon actions in one row, with tooltips, update indicator and keyboard activation', () => {
+  const h = harness(); h.state.footer = true; h.state.updateReady = true;
+  const footer = h.render();
+  assert.ok(find(footer, 'workspace-footer')); assert.equal(find(footer, 'workspace-tree'), undefined);
+  const settings = find(footer, 'settings'), machine = find(footer, 'machine');
+  assert.equal(settings.attrs.tooltip[0], 'Settings'); assert.equal(machine.attrs.tooltip[0], 'Add machine');
+  assert.equal(text(footer).trim(), '');
+  assert.equal(machine.nodes[0].path, 'mods/spaces-paths/monitor-plus.svg');
+  assert.equal(settings.nodes.length, 2);
+  settings.attrs.on_click[0](); assert.equal(h.state.commands.at(-1).command, 'app.settings');
+  machine.attrs.on_key_down[0]({ key: 'enter' }, { stop_propagation() {} });
+  assert.equal(h.state.commands.at(-1).command, 'mod.open');
+  assert.equal(h.state.commands.at(-1).args.name, 'machine-add');
+  h.view.init({}, {}); // Footer copies must not start the tree's watchers or timers.
 });

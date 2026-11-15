@@ -7,7 +7,7 @@ A compact coding workspace with agents nested under spaces in a Workspace tree s
 ## What you see
 
 - The window has no system title bar. On macOS, reserve traffic-light space at `[12, 16]`. Use Herdr's Paper theme in light appearance and Graphite in dark appearance; use theme names for surfaces and colors. Keep the person's UI and terminal fonts rather than shipping a global settings file.
-- A 252 px sidebar, minimum 44 and maximum 480, has a 46 px brand row, one scrollable Workspace tree region, and a 69 px Settings/Add machine footer. Keep the terminal and Git panel structure unchanged.
+- A 252 px sidebar, minimum 44 and maximum 480, has a 46 px brand row, one scrollable Workspace tree region, and a 44 px footer with Settings and Add machine side by side as icon-only buttons with tooltips. Keep the terminal and Git panel structure unchanged.
 - Space rows are 40 px high with a 26 px colored initial avatar, name, live open-agent count (including idle and zero), and a fold chevron. Each space keeps its saved color, with a stable fallback for new spaces and contrasting initials. Separate nested agent rows from the space header by 5 px and a subtle one-pixel tree guide; use a quieter surface for the focused agent. Below an expanded space, indent 40 px agent rows showing task title, provider and status. Keep Working, Needs input, Finished, Idle and Unknown distinct; animate Working with the native spinner. Search spaces, agent titles and providers; expand matching groups and retain parent context for matching sub-agents. A global Needs your input shortcut focuses the first blocked agent or peeks its sub-agent. Each space expands independently: its chevron toggles without switching, and switching spaces opens the new one while preserving other expanded groups. Click the active space to fold it. Pins sort within their space. Tab and Enter/Space activate rows and pins. Live child terminals nest once, and children without panes open in a peek. Keep the native compact rail, machine groups, remote recovery/login guidance, worktree grouping, menus and drag reordering.
 - The main work column has a 42 px tab strip and a work area with 8 px outer padding and gaps. Terminal panes have a 30 px header, 10 px corners, a one-pixel border that becomes the accent color when focused, and terminal padding `[14, 12]`. Frame a single pane too.
 - A right panel, exported at 498 px wide with bounds 280–900, contains a Files/Changes stack. Show Changes initially; the tab bar toggles Files and Changes. Preserve the stable node IDs used by those controls.
@@ -54,7 +54,7 @@ root (row)
 │   ├── brand: workspace-chrome
 │   ├── sidebar-lists (column)
 │   │   └── spaces: spaces-paths (spaces and nested agents)
-│   └── sidebar-footer: workspace-chrome {footer: true}
+│   └── sidebar-footer: spaces-paths {footer: true}
 └── work (column)
     ├── tabs: tabs
     ├── work-body (row)
@@ -70,7 +70,7 @@ Ship seven personal mods:
 
 | Mod | Responsibility |
 | --- | --- |
-| `spaces-paths` | Workspace tree, search and attention; native space/machine/worktree behavior. |
+| `spaces-paths` | Workspace tree, search, attention and compact footer; native space/machine/worktree behavior. |
 | `files-browser` | Lazy folder tree, file-type icons, Git status, open the separate file editor. |
 | `changes-graph` | Changes, staging/context menus, History/Graph, stash previews/actions, branch/remote actions, commits, generation. |
 | `git-file-preview` | Source, colored diffs, change gutters, rendered Markdown; receives a `selectionKey` prop. |

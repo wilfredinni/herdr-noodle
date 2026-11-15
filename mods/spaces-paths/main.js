@@ -3,7 +3,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { spaces, machines, agents, panes, run, openOverlay, exec, hc, theme, shared, watchFolder, window, layout, terminals, focused, setAgentOrder, checking } from "herdr";
+import { spaces, machines, agents, panes, run, openOverlay, exec, hc, theme, shared, watchFolder, window, layout, terminals, focused, setAgentOrder, checking, props, updates } from "herdr";
 
 import { agentTree, filterAgents } from "./agentTree.js";
 
@@ -61,6 +61,7 @@ export function tone(t, status) {
 
 export default class Spaces extends View {
   init(_props, cx) {
+    if (props()?.footer) return;
     this.expanded = {};
     this.agentEntries = [];
     this.filter = InputState.new({ placeholder: "Find a space or agent…" });
@@ -586,8 +587,23 @@ export default class Spaces extends View {
       .child(div().text_size(11).text_color(t.blocked).child(String(blocked.length)));
   }
 
+  footer(t) {
+    const button = (id, icon, label, action) => h_flex().id(id).relative().h(32).flex_1().min_w(0).max_w(32)
+      .items_center().justify_center().rounded(6).text_color(t.muted).cursor_pointer().tab_index(0)
+      .tooltip(label).accessibility_label(label).hover(s => s.bg(t.hover).text_color(t.foreground))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click(action)
+      .on_key_down((e, cx) => { if (e.key === "enter" || e.key === "space") { cx.stop_propagation(); action(); } })
+      .child(svg(icon).size(16).flex_none());
+    return h_flex().id("workspace-footer").size_full().bg(t.chrome).border_t(1).border_color(t.border)
+      .px(narrow() ? 2 : 12).gap(4).items_center()
+      .child(button("settings", "mods/workspace-chrome/settings.svg", "Settings", () => run("app.settings"))
+        .when(Boolean(updates().app.ready), el => el.child(div().absolute().top(4).right(3).size(5).rounded_full().bg(t.accent))))
+      .child(button("machine", "mods/spaces-paths/monitor-plus.svg", "Add machine", () => run("mod.open", { name: "machine-add" })));
+  }
+
   render() {
     const t = theme();
+    if (props()?.footer) return this.footer(t);
     const collapsed = narrow();
     const active = spaces().find(s => s.active)?.id;
     if (active !== this.activeSpace) { if (active) this.expanded[active] = true; this.activeSpace = active; }
