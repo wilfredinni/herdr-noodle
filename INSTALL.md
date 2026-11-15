@@ -32,7 +32,7 @@ The full layout is tested on **macOS**. Linux is not fully validated; image prev
 
 **The entire `helpers/noodle/` directory is required.** Installing only the mods can pass an initial render check while file editing and Review fail later. The helper modules import one another; do not copy just `workspace.py`.
 
-The seven mods are `spaces-paths`, `files-browser`, `changes-graph`, `git-file-preview`, `file-editor`, `git-error` and `workspace-usage`. Reuse Herdr's shipped `workspace-chrome`, `agents`, `tabs`, `pane` and `menu`, and its `worktree` dialog. Leave their folders untouched.
+The seven mods are `spaces-paths`, `files-browser`, `changes-graph`, `git-file-preview`, `file-editor`, `git-error` and `workspace-usage`. Reuse Herdr's shipped `workspace-chrome`, `tabs`, `pane` and `menu`, and its `worktree` dialog. Leave their folders untouched.
 
 Leave root `preview.png`, documentation, tests, prototypes and `native/` outside the Herdr home. `layouts/noodle.png` is the layout's referenced Settings thumbnail and must be installed. Never copy `.git`, credentials, `.env` files, generated `.d.ts` / `jsconfig.json`, `__pycache__`, `data/`, `shared.json`, global settings, keys or `layouts/.state/` from the source machine. Herdr creates runtime state on the destination.
 

@@ -2,7 +2,9 @@
 
 This is a personal customization for [Herdr](https://herdr.dev). Layout and mod cloning and sharing follow the installed Herdr `AGENTS.md` instructions.
 
-The layout derives from Herdr's `main` layout. `spaces-paths`, `files-browser`, `changes-graph`, and `workspace-usage` derive from the shipped `spaces`, `files`, `changes`, and `workspace-status` mods, respectively. Their `cloned_from` metadata records Herdr 0.1.15. The package also uses Herdr's shipped `workspace-chrome`, `agents`, `tabs`, `pane`, and `menu` mods and shipped program icons; it does not redistribute those built-in mod folders.
+The layout derives from Herdr's `main` layout. `spaces-paths`, `files-browser`, `changes-graph`, and `workspace-usage` derive from the shipped `spaces`, `files`, `changes`, and `workspace-status` mods, respectively. Their `cloned_from` metadata records Herdr 0.1.15. The package also uses Herdr's shipped `workspace-chrome`, `tabs`, `pane`, and `menu` mods and shipped program icons; it does not redistribute those built-in mod folders.
+
+The Workspace tree adapts title cleanup and program-icon rendering from Herdr's shipped `agents` mod.
 
 `git-file-preview`, `git-error`, the Git controls, usage adaptations, and commit-generation controls were developed as personal Herdr customizations. This repository does not assert a new license over upstream Herdr code or artwork.
 

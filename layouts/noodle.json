@@ -32,20 +32,8 @@
                 "mod": "spaces-paths"
               },
               "size": {
-                "weight": 1.20968
-              },
-              "min": 90
-            },
-            {
-              "id": "agents",
-              "type": "block",
-              "content": {
-                "mod": "agents"
-              },
-              "size": {
-                "weight": 0.7903201
-              },
-              "min": 90
+                "weight": 1
+              }
             }
           ]
         },
@@ -64,7 +52,7 @@
         }
       ],
       "size": {
-        "px": 268
+        "px": 252
       },
       "min": 44,
       "max": 480,

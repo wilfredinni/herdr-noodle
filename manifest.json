@@ -15,7 +15,6 @@
   ],
   "shippedMods": [
     "workspace-chrome",
-    "agents",
     "tabs",
     "pane",
     "menu"

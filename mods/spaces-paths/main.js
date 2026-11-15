@@ -1,12 +1,11 @@
-// Workspace spaces: stable colored avatars, worktrees under their checkout,
-// grouped by machine when more than one is known. After a space's name, the repo
-// its first terminal is in now, only where unusual: branch, ahead/behind. The
-// second line counts open agents; their state lives in the agents list. Click to
-// switch, right-click for its menu, drag to reorder.
+// Workspace tree: spaces, their agents, and a global attention shortcut.
+// Retains native machine/worktree grouping, menus, and space reordering.
 
-import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, agents, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { View, div, svg, image } from "gpui-kit";
+import { v_flex, h_flex, InputState, Input } from "gpui-base";
+import { spaces, machines, agents, panes, run, openOverlay, exec, hc, theme, shared, watchFolder, window, layout, terminals, focused, setAgentOrder, checking } from "herdr";
+
+import { agentTree, filterAgents } from "./agentTree.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -26,7 +25,6 @@ function place(s, ps) {
   const tabs = new Set((s.tabs ?? []).map((c) => c.id));
   return ps.find((p) => tabs.has(p.tab) && p.cwd)?.cwd || s.folder;
 }
-const rowHeight = ({ tree }) => (tree ? 44 : 48);
 const RAIL_CELL = 32;
 const railCell = (el) => h_flex().flex_none().justify_center().child(el);
 const where = (s, ps) => JSON.stringify([s.machine ?? null, place(s, ps)]);
@@ -35,9 +33,22 @@ const base = (path) => path.replace(/\/+$/, "").split("/").pop();
 // for this often, in repos the list shows, while the window is in front.
 const FALLBACK = 60000;
 
-// What a stored color name looks like on an avatar (the same in every mod
-// that draws space avatars): one strong color per hue, light and dark alike.
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
+
+function spaceColor(w, t) {
+  const saved = shared("space.colors")?.[w.id];
+  if (saved) return saved.startsWith("#") ? saved : MARK[saved] ?? t[saved] ?? t.accent;
+  const index = [...w.id].reduce((sum, c) => sum + c.codePointAt(0), 0) % 6;
+  return Object.values(MARK)[index];
+}
+
+function avatarInk(fill) {
+  const rgb = [1, 3, 5].map(i => {
+    const c = parseInt(fill.slice(i, i + 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722 > 0.179 ? "#000000" : "#ffffff";
+}
 
 // A space speaks up only when something in it needs you.
 export function glyph(status) {
@@ -50,6 +61,10 @@ export function tone(t, status) {
 
 export default class Spaces extends View {
   init(_props, cx) {
+    this.expanded = {};
+    this.agentEntries = [];
+    this.filter = InputState.new({ placeholder: "Find a space or agent…" });
+    this.filter.on("change", (_e, cx) => cx.notify());
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -68,6 +83,7 @@ export default class Spaces extends View {
     this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
     for (const state of Object.values(this.reconnecting)) state.busy = false;
     this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
+    if (checking()) return;
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
@@ -297,10 +313,36 @@ export default class Spaces extends View {
 
   // The rows, under a header per machine once one isn't this computer.
   grouped(t, collapsed) {
-    const rows = this.ordered();
+    const query = collapsed ? "" : this.filter.value().trim().toLowerCase();
+    const tabs = new Map(spaces().flatMap(s => s.tabs ?? []).map(tab => [tab.id, tab]));
+    const paneById = new Map(panes().map(p => [p.pane, p]));
+    const allAgents = agents();
+    const perTab = new Map();
+    for (const a of allAgents) perTab.set(a.tab, (perTab.get(a.tab) ?? 0) + 1);
+    const list = allAgents.map(a => ({ ...a, title: paneById.get(a.pane)?.title || a.title,
+      tab_name: tabs.get(a.tab)?.name ?? a.tab_name,
+      tab_named: tabs.get(a.tab)?.named && perTab.get(a.tab) === 1 }));
+    this.agentEntries = agentTree(list, terminals());
+    const rows = this.ordered().filter(r => !query || r.w.name.toLowerCase().includes(query)
+      || filterAgents(this.agentEntries.filter(a => a.space === r.w.id), query).length);
+    if (query && !rows.length) { setAgentOrder([]); return []; }
     const counts = new Map();
-    if (!collapsed) for (const agent of agents()) counts.set(agent.space, (counts.get(agent.space) ?? 0) + 1);
-    const draw = (r) => (collapsed ? this.compact(r, t) : this.row(r, t, counts.get(r.w.id) ?? 0));
+    for (const agent of list) counts.set(agent.space, (counts.get(agent.space) ?? 0) + 1);
+    const orderedAgents = [];
+    const draw = r => {
+      const entries = filterAgents(this.agentEntries.filter(a => a.space === r.w.id), query, r.w.name.toLowerCase().includes(query));
+      orderedAgents.push(...entries.filter(a => a.listed).map(a => a.address));
+      if (collapsed) return v_flex().flex_none().child(this.compact(r, t))
+        .when(r.w.active, el => el.children(entries.map(a => this.agentRow(a, t, true))));
+      const open = Boolean(query) || this.isOpen(r.w);
+      return v_flex().flex_none().child(this.row(r, t, counts.get(r.w.id) ?? 0))
+        .when(open, el => el.child(v_flex().flex_none().ml(r.tree ? 40 : 20).pl(10).pr(4).mt(5).mb(8).gap(2)
+          .border_l(1).border_color(t.border)
+          .children(entries.map(a => this.agentRow(a, t)))
+          .when(!entries.length, el => el.child(div().px(8).py(7).text_size(11).text_color(t.muted).child("No agents in this space")))));
+    };
+    // Register all space groups, including folded ones, in their visible order.
+    const result = [];
     const remote = [...new Set([...rows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
     const loading = m => {
       const layout = machines().find(k => k.name === m)?.layout;
@@ -308,16 +350,20 @@ export default class Spaces extends View {
         || spaces().some(s => (s.machine ?? null) === m && !this.shown.has(s.id));
     };
     const loadingRow = m => h_flex().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).items_center().when(collapsed, el => el.justify_center()).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
-    if (!remote.length) return loading(null) && !rows.length ? [loadingRow(null)] : rows.map(draw);
+    if (!remote.length) {
+      const result = loading(null) && !rows.length ? [loadingRow(null)] : rows.map(draw);
+      setAgentOrder(orderedAgents);
+      return result;
+    }
     const machineNames = [null, ...remote];
-    return machineNames.flatMap((m) => {
+    result.push(...machineNames.flatMap((m) => {
       const mine = rows.filter((r) => (r.w.machine ?? null) === m);
       const repair = this.reconnecting[m];
       const machine = this.machines.find(k => k.name === m) ?? repair?.machine;
       const connected = !m || machine?.state === "connected";
       const rebuilt = this.rebuilt(machine) || !!repair;
       const login = machine?.state === "needs_login" ? `hc machine login ${m}` : null;
-      const folded = this.folded.has(m);
+      const folded = !query && this.folded.has(m);
       const icon = svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none();
       const badge = div().absolute().right(-3).bottom(-2).size(6).rounded(3).border_1().border_color(t.chrome).bg(connected ? t.ansi2 : t.dim);
       const head = h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
@@ -362,7 +408,9 @@ export default class Spaces extends View {
             .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(login); this.copiedLogin = login; cx.notify(); })
             .child(this.copiedLogin === login ? "Copied" : "Copy")))] : [];
       return [cell(head), ...guidance, ...(folded ? [] : mine.length ? mine.map(draw) : [loading(m) ? loadingRow(m) : cell(empty)])];
-    });
+    }));
+    setAgentOrder(orderedAgents);
+    return result;
   }
 
   // Only what's unusual, after the name: "herdr \u00b7 spike \u21912 \u21931". The repo or
@@ -389,15 +437,13 @@ export default class Spaces extends View {
 
   row({ w, i, g, tree }, t, count) {
     const on = w.active;
+    const fill = spaceColor(w, t);
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
-    const colors = shared("space.colors") ?? {};
-    const color = colors[w.id] ?? "ansi6";
-    const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
     return v_flex()
       .relative()
       .id(`space-${w.id}`)
       .px(8)
-      .h(rowHeight({ tree }))
+      .h(40)
       .flex_none()
       .justify_center()
       .rounded(8)
@@ -429,8 +475,12 @@ export default class Spaces extends View {
         if (from !== null && over === w.id && from !== w.id) {
           const index = spaces().findIndex(s => s.id === w.id);
           if (index !== -1) run("space.move", { id: from, index: index + 1 });
-        } else if (from === w.id) run("space.select", { id: w.id });
+        } else if (from === w.id) this.selectSpace(w, cx);
         cx.notify();
+      })
+      .tab_index(0).accessibility_label(`${w.name}, ${count} open agents, ${this.isOpen(w) ? "expanded" : "collapsed"}`)
+      .on_key_down((e, cx) => {
+        if (e.key === "enter" || e.key === "space") { cx.stop_propagation(); this.selectSpace(w, cx); }
       })
       .on_mouse_down("right", () => this.menu(w))
       .child(
@@ -438,15 +488,22 @@ export default class Spaces extends View {
           .gap(9)
           .items_center()
           .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
-          .when(!tree, el => el.child(h_flex().size(32).flex_none().rounded(8).bg(fill).items_center().justify_center().text_size(17).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
-          .child(v_flex().flex_1().min_w(0).gap(2)
-            .child(h_flex().gap(5).items_center()
-              .child(div().min_w(0).max_w(150).truncate().tooltip(w.name).text_color(t.foreground).child(w.name))
-              .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()))
-            .child(h_flex().id(`space-agents-${w.id}`).gap(5).items_center().text_size(11).text_color(t.muted)
-              .tooltip(`${count} open agents`).accessibility_label(`${count} open agents`)
-              .child(svg("icons/agent.svg").size(12).flex_none())
-              .child(String(count)))),
+          .when(!tree, el => el.child(h_flex().id(`space-avatar-${w.id}`).size(26).flex_none().rounded(6).bg(fill).items_center().justify_center().text_size(11).font_semibold().text_color(avatarInk(fill)).child([...w.name][0]?.toUpperCase() ?? "?")))
+          .child(v_flex().flex_1().min_w(0)
+            .child(div().truncate().tooltip(w.name).text_color(t.foreground).child(w.name))
+            .when(Boolean(g && ((g.branch !== "main" && g.branch !== "master") || g.ahead || g.behind)), el => el.child(this.gitTail(g, tree, w.name, t))))
+          .when(w.status === "blocked" || w.status === "done", el => el.child(div().size(6).rounded(3).flex_none().bg(tone(t, w.status))))
+          .child(div().id(`space-agents-${w.id}`).flex_none().px(5).rounded(4).bg(t.raised).text_size(10).text_color(t.muted)
+            .tooltip(`${count} open agents`).accessibility_label(`${count} open agents`).child(String(count)))
+          .child(div().id(`toggle-space-${w.id}`).size(22).flex_none().flex().items_center().justify_center().rounded(4)
+            .cursor_pointer().tab_index(0).text_color(t.muted).hover(s => s.bg(t.raised))
+            .tooltip(`${this.isOpen(w) ? "Collapse" : "Expand"} ${w.name}`)
+            .accessibility_label(`${this.isOpen(w) ? "Collapse" : "Expand"} ${w.name}`)
+            .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+            .on_mouse_up("left", (_e, cx) => cx.stop_propagation())
+            .on_click((_e, cx) => { cx.stop_propagation(); this.expanded[w.id] = !this.isOpen(w); cx.notify(); })
+            .on_key_down((e, cx) => { if (e.key === "enter" || e.key === "space") { cx.stop_propagation(); this.expanded[w.id] = !this.isOpen(w); cx.notify(); } })
+            .child(svg(`mods/workspace-chrome/chevron-${this.isOpen(w) ? "down" : "right"}.svg`).size(11))),
       );
   }
 
@@ -466,29 +523,92 @@ export default class Spaces extends View {
       .child(div().absolute().right(5).text_color(tone(t, w.status)).child(glyph(w.status))));
   }
 
+  isOpen(w) { return this.expanded[w.id] ?? w.active; }
+
+  selectSpace(w, cx) {
+    if (w.active) this.expanded[w.id] = !this.isOpen(w);
+    else { this.expanded[w.id] = true; run("space.select", { id: w.id }); }
+    cx.notify();
+  }
+
+  focusAgent(a) {
+    run(a.listed ? "agent.focus" : "terminal.peek", { terminal: a.address });
+  }
+
+  agentRow(a, t, compact = false) {
+    const status = { blocked: "Needs input", done: "Finished", working: "Working", idle: "Idle" }[a.status] ?? "Unknown";
+    const on = a.address === focused()?.terminal || a.address === focused()?.agent;
+    const pic = a.program?.icon;
+    return h_flex().id(`agent-${a.address}`).h(compact ? 28 : 40).flex_none().px(8).gap(7).rounded(5)
+      .when(!compact, el => el.pl(8 + Math.min(a.depth, 4) * 12))
+      .items_center().cursor_pointer().tab_index(0)
+      .accessibility_label(`${a.label}, ${status}${a.pinned ? ", pinned" : ""}`)
+      .tooltip(`${a.label} · ${a.program?.name ?? a.app ?? "Agent"} · ${status}`)
+      .when(on, el => el.bg(t.surface)).hover(s => s.bg(t.hover))
+      .on_click(() => this.focusAgent(a))
+      .on_key_down((e, cx) => {
+        if (e.key === "enter" || e.key === "space") { cx.stop_propagation(); this.focusAgent(a); }
+      })
+      .child(a.status === "working" ? svg("mods/workspace-chrome/spinner.svg").size(10).flex_none().text_color(t.working).spin(900)
+        : div().size(6).flex_none().rounded(3).when(a.status === "idle", el => el.border_1().border_color(t.idle))
+          .when(a.status !== "idle", el => el.bg(tone(t, a.status))))
+      .when(compact && Boolean(pic), el => el.child(a.program.tint ? svg(pic).size(14).text_color(t.muted) : image(pic).w(14).h(14)))
+      .when(!compact, el => el.child(v_flex().flex_1().min_w(0)
+        .child(div().truncate().text_size(12).font_normal().text_color(t.foreground).child(a.label))
+        .child(h_flex().gap(4).text_size(10).text_color(t.muted)
+          .child(div().truncate().child(a.program?.name ?? a.app ?? "Agent"))
+          .child(div().flex_none().text_color(tone(t, a.status)).child(`· ${status}`)))))
+      .when(!compact && a.listed, el => el.child(div().id(`pin-${a.address}`).size(20).flex_none().rounded(4)
+        .text_color(a.pinned ? t.accent : t.muted).hover(s => s.bg(t.raised))
+        .tooltip(a.pinned ? "Unpin agent" : "Pin agent in this space").accessibility_label(a.pinned ? "Unpin agent" : "Pin agent in this space")
+        .tab_index(0)
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => { cx.stop_propagation(); run("terminal.pin", { terminal: a.address, pinned: !a.pinned }); })
+        .on_key_down((e, cx) => { if (e.key === "enter" || e.key === "space") { cx.stop_propagation(); run("terminal.pin", { terminal: a.address, pinned: !a.pinned }); } })
+        .flex().items_center().justify_center().child(svg(`mods/workspace-chrome/${a.pinned ? "pin-off" : "pin"}.svg`).size(11))));
+  }
+
+  attention(t) {
+    const blocked = this.agentEntries.filter(a => a.status === "blocked");
+    if (!blocked.length) return null;
+    const a = blocked[0];
+    const name = spaces().find(s => s.id === a.space)?.name ?? "Agent";
+    return h_flex().id("workspace-attention").mx(10).mt(8).mb(10).px(10).h(48).gap(8).flex_none().rounded(6).bg(t.raised)
+      .items_center().cursor_pointer().tab_index(0)
+      .accessibility_label(`${blocked.length} agents need input. Open ${name}: ${a.label}`)
+      .tooltip(blocked.map(a => `${spaces().find(s => s.id === a.space)?.name ?? "Agent"}: ${a.label}`).join("\n"))
+      .hover(s => s.bg(t.hover)).on_click(() => this.focusAgent(a))
+      .on_key_down((e, cx) => { if (e.key === "enter" || e.key === "space") { cx.stop_propagation(); this.focusAgent(a); } })
+      .child(svg("icons/agent.svg").size(14).flex_none().text_color(t.blocked))
+      .child(v_flex().flex_1().min_w(0)
+        .child(div().text_size(12).text_color(t.foreground).child("Needs your input"))
+        .child(div().text_size(10).text_color(t.muted).truncate().child(`${name} · ${a.label}`)))
+      .child(div().text_size(11).text_color(t.blocked).child(String(blocked.length)));
+  }
+
   render() {
     const t = theme();
     const collapsed = narrow();
-    const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
-    const sp = spaces();
-    const ids = new Set(sp.map(p => p.id));
-    const kept = Object.fromEntries(Object.entries(shared("space.colors") ?? {}).filter(([id]) => ids.has(id)));
-    let changed = Object.keys(kept).length !== Object.keys(shared("space.colors") ?? {}).length;
-    for (const p of sp) {
-      if (kept[p.id] || p.name === "~") continue;
-      const uses = c => Object.values(kept).filter(v => v === c).length;
-      kept[p.id] = palette.reduce((best, c) => uses(c) < uses(best) ? c : best);
-      changed = true;
-    }
-    if (changed) setShared("space.colors", kept);
+    const active = spaces().find(s => s.active)?.id;
+    if (active !== this.activeSpace) { if (active) this.expanded[active] = true; this.activeSpace = active; }
+    const rows = this.grouped(t, collapsed);
     return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
-      .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
+      .when(!collapsed, el => el.child(h_flex().mx(12).mt(9).mb(8).px(8).h(30).gap(7).items_center().rounded(6).border_1().border_color(t.border)
+        .child(svg("mods/workspace-chrome/search.svg").size(13).flex_none().text_color(t.muted))
+        .child(Input.new(this.filter).flex_1().min_w(0).h_full().text_size(12).text_color(t.foreground).accessibility_label("Find a space or agent"))))
+      .when(!collapsed && this.agentEntries.some(a => a.status === "blocked"), el => el.child(this.attention(t)))
+      .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.muted)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
         .when(!collapsed, el => el.child("Spaces"))
-        .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
+        .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+          .tab_index(0).accessibility_label("Create a space").tooltip("Create a space")
+          .hover(s => s.bg(t.hover).text_color(t.foreground))
+          .on_key_down((e, cx) => { if (e.key === "enter" || e.key === "space") { cx.stop_propagation(); run("space.new"); } })
           .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
-      .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always")
+      .child(v_flex().id("workspace-tree").flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always")
         .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })
-        .children(this.grouped(t, collapsed)));
+        .children(rows)
+        .when(!rows.length && !collapsed, el => el.child(div().px(8).py(12).text_size(12).text_color(t.muted)
+          .child(this.filter.value().trim() ? "No matching spaces or agents" : "Create a space to get started"))));
   }
 }

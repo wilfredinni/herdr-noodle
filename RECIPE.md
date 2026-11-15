@@ -1,14 +1,14 @@
 # Noodle
 
-A compact coding workspace with per-space agent counts in the sidebar, a separate agents list, a Git-aware file browser, and one panel for Changes, History, Graph, Stash and GitHub. A three-line commit area uses small matching Commit and Generate buttons, while the bottom bar shows subscription usage through the person's existing CLI connections. The preview is a native Herdr capture with fictional demo content.
+A compact coding workspace with agents nested under spaces in a Workspace tree sidebar, a Git-aware file browser, and one panel for Changes, History, Graph, Stash and GitHub. A three-line commit area uses small matching Commit and Generate buttons, while the bottom bar shows subscription usage through the person's existing CLI connections. The preview is a native Herdr capture with fictional demo content.
 
 ![Noodle](preview.png)
 
 ## What you see
 
 - The window has no system title bar. On macOS, reserve traffic-light space at `[12, 16]`. Use Herdr's Paper theme in light appearance and Graphite in dark appearance; use theme names for surfaces and colors. Keep the person's UI and terminal fonts rather than shipping a global settings file.
-- A 268 px sidebar, minimum 44 and maximum 480, has a 46 px brand row, resizable Spaces and Agents regions, and a 69 px Settings/Add machine footer. Spaces and Agents have a 90 px minimum each. This exported arrangement uses weights 1.20968 and 0.7903201.
-- Space rows show a 32 px rounded initial avatar beside the name and a second, smaller line with the shipped robot icon (`icons/agent.svg`) and the number of open agents in that space, including idle agents and zero. The narrow sidebar becomes a rail. Machine and worktree groups follow Herdr's existing spaces model.
+- A 252 px sidebar, minimum 44 and maximum 480, has a 46 px brand row, one scrollable Workspace tree region, and a 69 px Settings/Add machine footer. Keep the terminal and Git panel structure unchanged.
+- Space rows are 40 px high with a 26 px colored initial avatar, name, live open-agent count (including idle and zero), and a fold chevron. Each space keeps its saved color, with a stable fallback for new spaces and contrasting initials. Separate nested agent rows from the space header by 5 px and a subtle one-pixel tree guide; use a quieter surface for the focused agent. Below an expanded space, indent 40 px agent rows showing task title, provider and status. Keep Working, Needs input, Finished, Idle and Unknown distinct; animate Working with the native spinner. Search spaces, agent titles and providers; expand matching groups and retain parent context for matching sub-agents. A global Needs your input shortcut focuses the first blocked agent or peeks its sub-agent. Each space expands independently: its chevron toggles without switching, and switching spaces opens the new one while preserving other expanded groups. Click the active space to fold it. Pins sort within their space. Tab and Enter/Space activate rows and pins. Live child terminals nest once, and children without panes open in a peek. Keep the native compact rail, machine groups, remote recovery/login guidance, worktree grouping, menus and drag reordering.
 - The main work column has a 42 px tab strip and a work area with 8 px outer padding and gaps. Terminal panes have a 30 px header, 10 px corners, a one-pixel border that becomes the accent color when focused, and terminal padding `[14, 12]`. Frame a single pane too.
 - A right panel, exported at 498 px wide with bounds 280–900, contains a Files/Changes stack. Show Changes initially; the tab bar toggles Files and Changes. Preserve the stable node IDs used by those controls.
 - Files use 28 px tree rows, file-type/folder icons, and Git colors. Source and diff previews use a monospace font, line numbers, inline change gutters, and optional syntax colors. Markdown has Source/Diff and Preview modes, with a centered rendered document no wider than 760 px.
@@ -53,8 +53,7 @@ root (row)
 ├── sidebar (column)
 │   ├── brand: workspace-chrome
 │   ├── sidebar-lists (column)
-│   │   ├── spaces: spaces-paths
-│   │   └── agents: agents
+│   │   └── spaces: spaces-paths (spaces and nested agents)
 │   └── sidebar-footer: workspace-chrome {footer: true}
 └── work (column)
     ├── tabs: tabs
@@ -71,7 +70,7 @@ Ship seven personal mods:
 
 | Mod | Responsibility |
 | --- | --- |
-| `spaces-paths` | Two-line space rows; shipped space/machine/worktree behavior. |
+| `spaces-paths` | Workspace tree, search and attention; native space/machine/worktree behavior. |
 | `files-browser` | Lazy folder tree, file-type icons, Git status, open the separate file editor. |
 | `changes-graph` | Changes, staging/context menus, History/Graph, stash previews/actions, branch/remote actions, commits, generation. |
 | `git-file-preview` | Source, colored diffs, change gutters, rendered Markdown; receives a `selectionKey` prop. |
@@ -81,7 +80,7 @@ Ship seven personal mods:
 
 Also install the complete `helpers/noodle/` directory at the same relative path under the destination Herdr home. It contains the shared document, recovery, file-operation, search, task, review and image helpers. Follow [INSTALL.md](INSTALL.md) and the layout, preview, mods and helpers declared in [manifest.json](manifest.json); the seven mod folders alone are insufficient.
 
-Reuse shipped `workspace-chrome`, `agents`, `tabs`, `pane`, and `menu` and their assets; program icons come from `icons/`. Reuse the shipped `worktree` dialog for New worktree. The shipped folders themselves are not bundled.
+Reuse shipped `workspace-chrome`, `tabs`, `pane`, and `menu` and their assets; program icons come from `icons/`. Reuse the shipped `worktree` dialog for New worktree. The shipped folders themselves are not bundled.
 
 These are GPUI JavaScript views, not HTML, React DOM, or Node programs. Use `gpui-kit`, `gpui-base`, and the installed `herdr.d.ts`/`gpui-kit.d.ts` API. UI uses `spaces`, `machines`, `agents`, `panes`, `focused`, `theme`, `settings`, `layout`, `props`, `shared`/`setShared`, `exec`, `hc`, `readTextFile`, and `watchFolder`. Use Herdr commands for space/terminal/machine operations and `pane.split`/`pane.focus` to open previews. Git errors use `openOverlay`/`closeOverlay`.
 
@@ -93,7 +92,7 @@ Runtime programs are Git, Python 3.9+, `sh`, `rg` for Quick Open/content search,
 
 - Tested against Herdr 0.1.15; use the current installed type declarations when adapting to another release. Generated declarations and editor configuration are intentionally omitted. Never change Herdr's shipped files; these custom folders are personal clones.
 - Never overwrite existing names on someone else's machine. The installing agent must resolve collisions before copying files, following the local Herdr `AGENTS.md`. If renaming a mod, change layout references, self-opening overlay names, asset paths, and Python helper paths together.
-- Preserve node IDs (`sidebar`, `spaces`, `agents`, `tabs`, `main`, `panel`, `panel-body`, `files`, `changes`, `status`) because shipped controls address them. Do not copy `shared.json`, workspace documents, click-state files, keys, or global settings.
+- Preserve node IDs (`sidebar`, `spaces`, `tabs`, `main`, `panel`, `panel-body`, `files`, `changes`, `status`) because shipped controls address them. Do not copy `shared.json`, workspace documents, click-state files, keys, or global settings.
 - macOS with Herdr 0.1.15 is the tested full installation. Linux is not fully validated and the current image/Finder adapters require macOS. Windows is unsupported by the full package: Python helpers use Unix `fcntl` and `os.fchmod`, despite the PowerShell folder-listing adapter. Local editing, search, tasks, Review and asset helpers do not run on remote machines; remote Git features require the relevant programs there. See [INSTALL.md](INSTALL.md).
 - The simple editor works without native patches. Git gutter marks inside the writable editor require `EditorState.set_gutter_marks`; skip them when the API is absent. Source preview marks do not need that API. The files in `native/` are optional development patches, not an installation step; see [native/README.md](native/README.md).
 - History and Graph stop at 200 commits. Changes shows at most 1,000 file rows. Files lists at most 500 entries per folder and 5,000 in total. Source previews are bounded at 5,000 lines/400,000 characters; diff previews at 1,500 lines; Markdown at 200,000 characters. Host file reads have Herdr's own size limit.
@@ -107,7 +106,7 @@ Runtime programs are Git, Python 3.9+, `sh`, `rg` for Quick Open/content search,
 
 1. `herdr-app check` passes for every included mod; switching to `noodle` shows the layout without runtime errors.
 2. A fresh configuration install copies the layout, Settings thumbnail, seven mods and the complete `helpers/noodle/` directory from the manifest. A conflicting name leaves all existing files untouched. Generated runtime state and credentials are not copied.
-3. The sidebar displays a robot icon and live open-agent counts below names with a 32 px avatar; native agent working/blocked/done/idle states remain distinct.
+3. The sidebar shows live counts beside compact avatars, nests agents under spaces, filters across spaces, and focuses blocked agents through the attention shortcut. Folding, pins, child peeks, keyboard activation, remote groups, reordering and the compact rail work; native working/blocked/done/idle states remain distinct.
 4. Files opens the separate file editor, with syntax highlighting and ⌘S / Ctrl+S save. Changes, History/Graph and Stash keep the same diff component. Source and diff content remain bounded and the active repository follows the original terminal.
 5. In a disposable Git repository, checked files commit only staged content; an unchecked set commits all current new/modified/deleted files; partially staged hunks remain intact.
 6. History has no ref badges, Graph does, and creating a valid missing branch does not reset existing branches or overwrite dirty files.
