@@ -21,7 +21,7 @@ function element(id) {
 function input(options = {}) {
   let value = options.value || ''; const events = {};
   return { on(name, fn) { events[name] = fn; }, value: () => value, set_value(next) { value = next; }, focus() {},
-    type(next, cx) { value = next; events.change?.({}, cx); }, blur(cx) { events.blur?.({}, cx); } };
+    type(next, cx) { value = next; events.change?.({}, cx); }, blur(cx) { events.blur?.({}, cx); }, submit(cx) { events.submit?.({}, cx); } };
 }
 const find = (node, id) => node?.id === id ? node : node?.nodes?.map(child => find(child, id)).find(Boolean);
 function load(c, file, names) {
@@ -33,7 +33,7 @@ function harness() {
   const paneList = [{pane:"terminal",terminal:"t",tab:"tab",cwd:"/repo"}];
   let response = action => action === 'ready' ? { ready: true, head: 'a'.repeat(40), branch: 'feature' } : action === 'info' ? { repo: { name: 'example/repo' }, templates: [] } : action === 'prs' || action === 'runs' ? { items: [], more: false } : {};
   let notifications = 0;
-  const cx = { notify() { notifications++; }, focus_handle: () => ({ focus() {} }), timer: { every(ms, fn) { timers.push({ ms, fn }); } },
+  const cx = { notify() { notifications++; }, stop_propagation() {}, focus_handle: () => ({ focus() {} }), timer: { every(ms, fn) { timers.push({ ms, fn }); } },
     spawn(fn) { jobs.push(fn(cx)); }, write_to_clipboard(value) { clipboard.push(value); }, open_url(value) { urls.push(value); } };
   const c = vm.createContext({ Map, Set, Date, JSON, div: element, svg: () => element(), image: element, v_flex: element, h_flex: element,
     Button: { new: element }, Tabs: { new: element }, Tab: { new: element }, InputState: { new: input }, TextareaState: { new: input }, Input: { new: element }, Textarea: { new: element }, Checkbox: { new: element },
@@ -242,4 +242,48 @@ test('GitHub review locations keep their own root and open a pinned read-only so
   const selection=h.state.get('git-file-preview.tab');
   assert.equal(selection.root,'/repo');assert.equal(selection.hash,'b'.repeat(40));assert.equal(selection.kind,'file');assert.equal(selection.navigation.line,4);
   assert.equal(h.commands.at(-1).args.mod,'git-file-preview');
+});
+
+test('base picker lazily loads remote branches, filters and saves a keyboard selection', async () => {
+  const h = harness(), view = h.composer(); await h.flush();
+  assert.equal(view.base.value(), 'main');
+  assert.equal(h.requests.some(r => r.action === 'branches'), false);
+  h.setResponse(() => ({items: ['release/next', 'main', 'develop']}));
+  find(view.render(h.t,h.cx),'pr-base-picker').handlers.open_change(true,h.cx); await h.flush();
+  assert.deepEqual(Array.from(view.baseChoices()), ['main','develop','release/next']);
+  const search = view.baseSearch;
+  find(view.render(h.t,h.cx),'pr-base-menu').handlers.key_down({key:'down'},h.cx);
+  view.baseSearch.submit(h.cx);
+  assert.equal(view.base.value(), 'develop'); assert.equal(view.baseOpen, false);
+  assert.equal(h.state.get(view.key).base, 'develop');
+  view.openBases(true,h.cx);const height=find(view.render(h.t,h.cx),'pr-base-branches').attrs.h[0];view.baseSearch.type('release',h.cx);
+  assert.equal(find(view.render(h.t,h.cx),'pr-base-branches').attrs.h[0],height);
+  assert.equal(view.baseSearch, search);
+  assert.ok(find(view.render(h.t,h.cx),'pr-base-option-release/next'));
+  assert.equal(find(view.render(h.t,h.cx),'pr-base-option-main'), undefined);
+  view.baseSearch.submit(h.cx);assert.equal(view.base.value(), 'release/next');
+  assert.equal(h.requests.filter(r => r.action === 'branches').length, 1);
+  let submitted;view.submit=async (action,data)=>{submitted={action,data};return {title:'Generated',body:'Body'};};
+  view.generate(h.cx);await h.flush();assert.equal(submitted.data.base,'release/next');
+});
+
+test('base picker retries load failures without changing the draft and Escape keeps the composer', async () => {
+  const h=harness(),view=h.composer();await h.flush();view.title.type('Keep this title',h.cx);
+  h.setResponse(()=>{throw Error('Authentication required');});view.openBases(true,h.cx);await h.flush();
+  assert.equal(view.basesError,'Authentication required');assert.equal(view.base.value(),'main');
+  h.setResponse(()=>({items:['main','develop']}));find(view.render(h.t,h.cx),'pr-base-retry').handlers.click({},h.cx);await h.flush();
+  assert.ok(find(view.render(h.t,h.cx),'pr-base-option-develop'));assert.equal(view.title.value(),'Keep this title');
+  find(view.render(h.t,h.cx),'pr-base-menu').handlers.key_down({key:'escape'},h.cx);
+  assert.equal(view.baseOpen,false);assert.equal(h.closed.length,0);
+  view.chooseBase('not-a-repository-branch',h.cx);assert.equal(view.base.value(),'main');
+});
+
+test('base picker ignores stale repository responses and cannot select while generating', async () => {
+  const h=harness(),view=h.composer();await h.flush();let complete;
+  h.setResponse(()=>new Promise(resolve=>{complete=resolve;}));view.openBases(true,h.cx);
+  h.state.set('github.active',{...h.owner,context:'another repository'});
+  complete({items:['main','develop']});await h.flush();assert.equal(view.branches,null);
+  view.branches=['main','develop'];view.chooseBase('develop',h.cx);assert.equal(view.base.value(),'main');
+  h.state.set('github.active',{...h.owner});view.busy=true;
+  view.chooseBase('develop',h.cx);assert.equal(view.base.value(),'main');
 });

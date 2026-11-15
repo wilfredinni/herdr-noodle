@@ -63,7 +63,7 @@ def pages(root, repo, endpoint):
         values.extend(value)
         if len(value) < 100:
             return values
-    raise ValueError('This review exceeds 10,000 items. Open it on GitHub for the complete conversation.')
+    raise ValueError('This collection exceeds 10,000 items. Open it on GitHub for the complete list.')
 
 
 def pull(root, repo, n):
@@ -296,6 +296,8 @@ def handle(action, request, home):
     if action == 'github_template':
         return {'body': template(root, request.get('template', ''))}
     repo = repository(root)
+    if action == 'github_branches':
+        return {'items': [branch['name'] for branch in pages(root, repo, f'repos/{repo["name"]}/branches')]}
     if action == 'github_info':
         current = []
         if request.get('branch'):

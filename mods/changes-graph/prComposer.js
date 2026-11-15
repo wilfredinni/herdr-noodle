@@ -1,5 +1,5 @@
 import { div, svg } from "gpui-kit";
-import { h_flex, v_flex, Button, Input, InputState, Textarea, TextareaState, Checkbox } from "gpui-base";
+import { h_flex, v_flex, Button, Input, InputState, Textarea, TextareaState, Checkbox, Popover, ScrollHandle } from "gpui-base";
 import { shared, setShared, openOverlay, closeOverlay, writeTextFile, notify } from "herdr";
 import { CommitGenerator } from "./commitGenerator.js";
 import { githubCall, githubButton } from "./githubPanel.js";
@@ -54,6 +54,10 @@ export class PrComposer {
     this.key = prDraftKey(this.root, this.on, this.branch); this.settingsKey = prSettingsKey(this.root, this.on);
     const saved = shared(this.key) || {};
     this.base = InputState.new({ value: saved.base || options.info.repo.defaultBranchRef?.name || "main", placeholder: "Base branch" });
+    this.baseSearch = InputState.new({ placeholder: "Find a branch…" });
+    this.baseFocus = cx.focus_handle(); this.baseScroll = ScrollHandle.new(); this.baseAt = 0; this.branches = null;
+    this.baseSearch.on("change", (_e, cx) => { this.baseAt = 0; this.baseScroll.scroll_to_item(0); cx.notify(); });
+    this.baseSearch.on("submit", (_e, cx) => this.chooseBase(this.baseChoices()[this.baseAt], cx));
     this.title = InputState.new({ value: saved.title || "", placeholder: "Pull request title" });
     this.body = TextareaState.new({ value: saved.body || "", placeholder: "Describe the problem, changes and validation.", rows: 12 });
     this.draft = saved.draft ?? false; this.revision = 0; this.files = []; this.busy = false; this.ready = false;
@@ -77,6 +81,61 @@ export class PrComposer {
     if (JSON.stringify(shared(this.key)) !== JSON.stringify(draft)) setShared(this.key, draft);
   }
   close() { this.saveDraft(); closeOverlay(this.options.overlay); }
+  baseChoices() {
+    const query = this.baseSearch.value().trim().toLowerCase(), defaultBranch = this.options.info.repo.defaultBranchRef?.name;
+    return (this.branches || []).filter(name => name.toLowerCase().includes(query))
+      .sort((a, b) => Number(b === defaultBranch) - Number(a === defaultBranch) || Number(b === this.base.value()) - Number(a === this.base.value()) || a.localeCompare(b));
+  }
+  openBases(open, cx) {
+    this.baseOpen = open;
+    if (open) {
+      this.baseSearch.set_value(""); this.baseAt = Math.max(0, this.baseChoices().indexOf(this.base.value()));
+      this.baseSearch.focus();
+      if (!this.branches) this.loadBases(cx);
+    } else this.baseFocus.focus();
+    cx.notify();
+  }
+  loadBases(cx) {
+    if (this.basesLoading || !this.current()) return;
+    this.basesLoading = true; this.basesError = null;
+    cx.spawn(async cx => {
+      try {
+        const value = await githubCall("branches", this.options);
+        if (this.current()) { this.branches = value.items; this.baseAt = Math.max(0, this.baseChoices().indexOf(this.base.value())); }
+      } catch (error) { if (this.current()) this.basesError = error.message; }
+      finally { this.basesLoading = false; cx.notify(); }
+    });
+  }
+  chooseBase(name, cx) {
+    if (!name || !this.branches?.includes(name) || this.busy || !this.current()) return;
+    this.base.set_value(name); this.revision++; this.saveDraft(); this.openBases(false, cx);
+  }
+  basePicker(t, disabled) {
+    const choices = this.baseChoices(), rows = choices.slice(0, 100), defaultBranch = this.options.info.repo.defaultBranchRef?.name;
+    const trigger = Button.new("pr-base-branch").h_flex().flex_1().min_w(0).h(32).px(8).gap(8).rounded(5).border_1().border_color(t.input)
+      .bg(t.background).text_size(12).text_color(t.foreground).disabled(disabled).accessibility_label(`PR base branch: ${this.base.value()}`).tooltip("Choose the branch to merge into")
+      .hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent))
+      .child(svg("mods/changes-graph/branch.svg").size(13).flex_none().text_color(t.muted))
+      .child(div().flex_1().min_w(0).truncate().child(this.base.value())).child(svg("mods/changes-graph/chevron.svg").size(10).flex_none().text_color(t.muted));
+    return Popover.new("pr-base-picker").open(Boolean(this.baseOpen)).anchor("bottom_left").track_focus(this.baseFocus)
+      .on_open_change((open, cx) => this.openBases(open, cx)).trigger(trigger)
+      .when(this.baseOpen, el => el.content(v_flex().id("pr-base-menu").w(360).p(5).gap(4).rounded(8).border_1().border_color(t.border).bg(t.popover).shadow_md().text_color(t.foreground).track_focus(this.baseFocus)
+        .on_key_down((e, cx) => {
+          if (e.key === "escape") { this.openBases(false, cx); cx.stop_propagation(); }
+          if (["up", "down"].includes(e.key)) { this.baseAt = Math.max(0, Math.min(rows.length - 1, this.baseAt + (e.key === "down" ? 1 : -1))); this.baseScroll.scroll_to_item(this.baseAt); cx.stop_propagation(); cx.notify(); }
+        })
+        .child(Input.new(this.baseSearch).h(30).px(8).text_size(12).accessibility_label("Find a base branch"))
+        .child(v_flex().id("pr-base-branches").h(Math.min(240, Math.max(36, (this.branches?.length || 0) * 32))).overflow_y_scrollbar().track_scroll(this.baseScroll)
+          .children(rows.map((name, i) => Button.new(`pr-base-option-${name}`).h_flex().w_full().h(32).flex_none().px(8).gap(8).rounded(4).text_size(12).text_color(t.foreground)
+            .bg(i === this.baseAt ? t.selected : "#00000000").accessibility_label(`Use base branch ${name}`).tooltip(name).disabled(disabled)
+            .hover(el => el.bg(t.hover)).focus(el => el.bg(t.hover)).on_click((_e, cx) => this.chooseBase(name, cx))
+            .child(svg(name === this.base.value() ? "mods/workspace-chrome/check.svg" : "mods/changes-graph/branch.svg").size(12).flex_none().text_color(t.muted))
+            .child(div().flex_1().min_w(0).truncate().child(name))
+            .when(name === defaultBranch, el => el.child(div().flex_none().text_size(11).text_color(t.muted).child("default")))))
+          .when(!rows.length, el => el.child(div().p(8).text_size(12).text_color(t.muted).child(this.basesLoading ? "Loading branches…" : this.basesError || (this.branches?.length ? "No matching branches" : "No branches available")))))
+        .when(Boolean(this.basesError), el => el.child(githubButton("pr-base-retry", "Retry", cx => this.loadBases(cx), t, this.basesLoading)))
+        .when(choices.length > 100, el => el.child(div().px(8).text_size(11).text_color(t.muted).child(`${choices.length} matches. Refine your search to see more.`)))));
+  }
   check(cx) {
     this.checking = true;
     cx.spawn(async cx => {
@@ -145,7 +204,7 @@ export class PrComposer {
         .child(closeButton("close-pr-composer", "Close PR composer", () => this.close(), t).disabled(this.busy)))
       .child(div().text_size(11).text_color(t.muted).child(`${this.options.info.repo.name} · ${this.branch} · ${this.head.slice(0, 8)}`))
       .child(h_flex().gap(10).items_center().child(div().text_size(12).child("Base branch"))
-        .child(Input.new(this.base).flex_1().h(32).px(8).rounded(5).border_1().border_color(t.input).bg(t.background).text_size(12).accessibility_label("PR base branch")))
+        .child(this.basePicker(t, disabled)))
       .child(Input.new(this.title).h(34).px(10).rounded(5).border_1().border_color(t.input).bg(t.background).text_size(13).accessibility_label("PR title"))
       .child(Textarea.new(this.body).flex_1().min_h(160).w_full().p(10).rounded(5).border_1().border_color(t.input).bg(t.background).text_size(13).line_height("20px").accessibility_label("PR description"))
       .child(h_flex().gap(8).items_center().child(Checkbox.new("pr-draft").size(14).p(0).flex_none().flex().items_center().justify_center().rounded(3).border_1()

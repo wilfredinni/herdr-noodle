@@ -39,6 +39,14 @@ class GithubTests(unittest.TestCase):
             self.assertEqual(dispatch('github_prs', self.request), {'items': []})
             call.assert_called_once()
 
+    def test_base_branches_come_from_all_repository_pages(self):
+        first = [{'name': f'release/{i}'} for i in range(100)]
+        with patch.object(gh, 'repository', return_value=REPO), patch.object(gh, 'api', side_effect=[first, [{'name': 'main'}]]) as api:
+            value = dispatch('github_branches', self.request)
+        self.assertEqual(value['items'], [row['name'] for row in first] + ['main'])
+        self.assertEqual(api.call_args_list[0].args[2], 'repos/example/repo/branches?per_page=100&page=1')
+        self.assertEqual(api.call_args_list[1].args[2], 'repos/example/repo/branches?per_page=100&page=2')
+
     def test_private_transport_cleanup_and_scope(self):
         prepared = dispatch('github_prepare', self.request)
         file = Path(prepared['path'])
