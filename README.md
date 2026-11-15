@@ -7,7 +7,7 @@ A compact Herdr layout for coding agents, browsing files, reviewing Git changes,
 Paste this prompt into a coding agent running inside Herdr:
 
 ```text
-Read ~/.config/herdr-app/AGENTS.md, then install https://github.com/wilfredinni/herdr-noodle following its INSTALL.md, RECIPE.md and complete manifest.json, including helpers/noodle/.
+Use herdr-app --help and HERDR_APP_HOME to locate the destination Herdr home, read that home's AGENTS.md, then install https://github.com/wilfredinni/herdr-noodle following its INSTALL.md, RECIPE.md and complete manifest.json, including helpers/noodle/.
 ```
 
 The agent follows [INSTALL.md](INSTALL.md), [RECIPE.md](RECIPE.md) and the included files, checks name conflicts before copying, installs the layout, Settings thumbnail, seven mods and **all of `helpers/noodle/`**, validates the installed files, and switches to `noodle`. Use the actual Herdr home if `HERDR_APP_HOME` overrides the usual path. Global settings, keys, sign-ins and runtime state are not copied.
