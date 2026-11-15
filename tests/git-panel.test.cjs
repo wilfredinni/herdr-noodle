@@ -51,7 +51,7 @@ function harness(root) {
   load(c, 'graph.js', ['GRAPH_ARGS', 'HISTORY_ARGS', 'GRAPH_LIMIT', 'GRAPH_ROW_HEIGHT', 'graphRows', 'COMMIT_FORMAT', 'commitDetail', 'refLabels', 'shortAge']);
   load(c, 'fileOps.js', ['git', 'verify', 'stage', 'stashes', 'popStash', 'trash', 'addIgnore', 'changeStash']);
   load(c, 'gitToolbar.js', ['GitToolbar', 'worktreeRows']); load(c, 'fileActions.js', ['FileActions']); load(c, 'commitGenerator.js', ['CommitGenerator']);
-  load(c, 'stashPanel.js', ['StashPanel']); load(c, 'main.js', ['Changes', 'upstreamState']);
+  load(c, 'stashPanel.js', ['StashPanel']); load(c, 'githubPanel.js', ['GithubPanel']); load(c, 'main.js', ['Changes', 'upstreamState']);
   const view = new c.Changes(); view.watch = () => {}; view.init({}, cx); view.generator.machine = null;
   return { c, cx, view, state, t, errors, async flush() { while (jobs.length) await Promise.all(jobs.splice(0)); } };
 }

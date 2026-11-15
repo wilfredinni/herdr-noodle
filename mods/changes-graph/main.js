@@ -8,12 +8,16 @@ import { FileActions } from "./fileActions.js";
 import { CommitGenerator, CommitInstructions } from "./commitGenerator.js";
 import { Repositories } from "./repositories.js";
 import { StashPanel } from "./stashPanel.js";
+import { GithubPanel } from "./githubPanel.js";
+import { GithubPreview } from "./githubPreview.js";
+import { PrComposer, PrSettings } from "./prComposer.js";
 import { git, stage, trash, addIgnore } from "./fileOps.js";
 
 function sourceLocation() {
   const space = spaces().find((s) => s.active), f = focused();
   const all = panes(), active = f?.pane ? all.find(p => p.pane === f.pane) : null;
-  const selection = ["git-file-preview", "file-editor"].includes(active?.mod) ? shared(`${active.mod}.${f.tab}`) : null;
+  const selection = active?.mod === "changes-graph" ? shared(`github.preview.${f.tab}`)
+    : ["git-file-preview", "file-editor"].includes(active?.mod) ? shared(`${active.mod}.${f.tab}`) : null;
   const pane = selection ? all.find(p => p.pane === selection.sourcePane) : active;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
@@ -40,12 +44,15 @@ export default class Changes extends View {
   init(_props, cx) {
     const options = typeof props === "function" ? props() : _props;
     if (options?.commitInstructions) { this.commitInstructions = new CommitInstructions(options); return; }
+    if (options?.prComposer) { this.prComposer = new PrComposer(options, cx); return; }
+    if (options?.prSettings) { this.prSettings = new PrSettings(options); return; }
+    if (options?.githubPreview) { this.githubPreview = new GithubPreview(options, cx); return; }
     this.drafts = new Map(); this.repositories = new Repositories(this, workspace, cx);
     this.view = "changes"; this.graph = []; this.graphError = null; this.selectedCommit = null; this.detail = null; this.detailError = null;
     this.history = []; this.historyError = null; this.historyLoading = false;
     this.files = []; this.message = ""; this.messageRevision = 0; this.generator = new CommitGenerator(this, key, cx); this.handle = cx.focus_handle();
     this.branch = null; this.head = ""; this.sync = null; this.lastCommit = null; this.undoOpen = false; this.gitToolbar = new GitToolbar(this, key, cx);
-    this.fileActions = new FileActions(this, key, cx); this.stash = new StashPanel(this); this.historyPath = null; this.collapsed = {};
+    this.fileActions = new FileActions(this, key, cx); this.stash = new StashPanel(this); this.github = new GithubPanel(this, key, cx); this.historyPath = null; this.collapsed = {};
     this.input = TextareaState.new({ placeholder: "Write a commit message…", rows: 3 });
     this.input.on("change", (_e, cx) => {
       const hadMessage = Boolean(this.message.trim());
@@ -83,7 +90,7 @@ export default class Changes extends View {
       this.history = []; this.historyError = null; this.historyLoading = false; this.historyVersion = (this.historyVersion ?? 0) + 1;
       this.context = context; this.root = null; this.files = []; this.open = null;
       this.branch = null; this.head = ""; this.sync = null; this.lastCommit = null; this.undoOpen = false; this.undoSnapshot = null; this.gitToolbar.reset();
-      this.fileActions.reset(); this.stash.reset(); this.historyPath = null; this.collapsed = {};
+      this.fileActions.reset(); this.stash.reset(); this.github.reset(); this.historyPath = null; this.collapsed = {};
       this.message = ""; this.messageRevision++; this.input.set_value(""); this.error = null; this.note = null; this.watched = null; this.limited = false;
     }
     if (!cwd) return;
@@ -144,6 +151,8 @@ export default class Changes extends View {
         this.branch = branch.code === 0 ? branch.stdout.trim().replace(/^refs\/heads\//, "") : null;
         if (this.head !== hash) { this.undoOpen = false; this.undoSnapshot = null; }
         this.head = hash; this.lastCommit = lastCommit;
+        const active = { context, root, on, branch: this.branch, head: hash };
+        if (JSON.stringify(shared("github.active")) !== JSON.stringify(active)) setShared("github.active", active);
         this.sync = upstreamState(status.stdout);
         if (changedContext && revision === this.messageRevision) {
           this.message = this.drafts.get(draftKey(root, on)) || ""; this.messageRevision++; this.input.set_value(this.message);
@@ -153,6 +162,7 @@ export default class Changes extends View {
         if (this.view === "graph") await this.loadGraph(context);
         if (this.view === "history") await this.loadHistory(context);
         if (this.view === "stashes") await this.stash.refresh();
+        if (this.view === "github") this.github.enter(cx);
         if (this.open && !files.some((f) => f.path === this.open)) this.open = null;
       } catch (e) { if (key() === context) this.error = String(e); }
       finally { this.loading = false; cx.notify(); }
@@ -214,6 +224,7 @@ export default class Changes extends View {
       if (view === "graph") cx.spawn(async cx => { await this.loadGraph(context); cx.notify(); });
       if (view === "history") cx.spawn(async cx => { await this.loadHistory(context); cx.notify(); });
       if (view === "stashes") cx.spawn(async cx => { await this.stash.refresh(); cx.notify(); });
+      if (view === "github") this.github.enter(cx);
     }
     cx.notify();
   }
@@ -533,10 +544,27 @@ export default class Changes extends View {
 
   render(cx) {
     if (this.commitInstructions) return this.commitInstructions.render(theme());
+    if (this.prComposer) return this.prComposer.render(theme(), cx);
+    if (this.prSettings) return this.prSettings.render(theme());
+    if (this.githubPreview) return this.githubPreview.render(theme(), cx);
     this.repositories.refresh(cx);
     const current = key() === this.context;
     if (!current) this.refresh(cx);
     this.previewAction(cx);
+    const publish = shared("github.publish"), created = shared("github.created");
+    if (publish && publish.id !== this.githubPublishId && !this.loading && !this.busy) {
+      this.githubPublishId = publish.id;
+      cx.spawn(async cx => {
+        if (this.gitToolbar.current(publish) && this.branch === publish.branch && this.head === publish.head) {
+          if (publish.action === "publish") this.gitToolbar.publish(cx, publish);
+          else this.gitToolbar.run("Push", ["push"], cx, publish, publish.head);
+        }
+      });
+    }
+    if (created && created.id !== this.githubCreatedId && !this.github.loading) {
+      this.githubCreatedId = created.id;
+      if (created.root === this.root && created.on === this.on) cx.spawn(async cx => this.github.refresh(cx));
+    }
     const request = shared(`git-file-preview.${focused()?.tab}.history`), requestId = JSON.stringify(request);
     if (request && requestId !== this.previewHistoryRequest) {
       this.previewHistoryRequest = requestId;
@@ -558,8 +586,8 @@ export default class Changes extends View {
         if (e.key === "escape" && this.typing) { this.typing = false; this.handle.focus(); cx.stop_propagation(); cx.notify(); }
       })
       .child(this.gitToolbar.repositoryHeader(t, cx))
-      .child(Tabs.new("git-views").h_flex().h(38).flex_none().px(10).gap(8).border_b(1).border_color(t.border).bg("#00000000")
-        .children([["changes", "Changes"], ["history", "History"], ["graph", "Graph"], ["stashes", "Stash"]].map(([view, label]) =>
+      .child(Tabs.new("git-views").h_flex().h(38).flex_none().px(10).gap(8).border_b(1).border_color(t.border).bg("#00000000").overflow_x_scrollbar()
+        .children([["changes", "Changes"], ["history", "History"], ["graph", "Graph"], ["stashes", "Stash"], ["github", "GitHub"]].map(([view, label]) =>
           Tab.new(`git-view-${view}`).h_flex().h(38).px(5).gap(6).flex_none().items_center().justify_center().text_size(12).font_normal().selected(this.view === view)
             .accessibility_label(label).bg("#00000000").text_color(this.view === view ? t.foreground : t.muted).border_b(this.view === view ? 2 : 0).border_color(t.accent)
             .focus(el => el.bg(t.raised)).on_click((_e, cx) => this.selectView(view, cx))
@@ -571,6 +599,7 @@ export default class Changes extends View {
         .when(this.view === "changes", el => el.child(this.fileActions.header(t, cx)))))
       .when(this.view === "history" || this.view === "graph", el => el.child(this.graphView(t, this.view === "history")))
       .when(this.view === "stashes", el => el.child(this.stash.render(t, cx)))
+      .when(this.view === "github", el => el.child(this.github.render(t, cx)))
       .when(this.view === "changes", panel => panel
         .child(div().flex_1().min_h(0).relative()
           .child(v_flex().id("changes-list").absolute().inset_0().overflow_y_scroll().px(6).pb(8)

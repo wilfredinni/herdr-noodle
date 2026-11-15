@@ -31,7 +31,7 @@ function harness(repositoryCount = 2) {
     shared: key => state.get(key), setShared: (key, value) => state.set(key, value),
     appHome: () => '/app', readTextFile: async () => 'discovery script',
     TextareaState: { new: () => input },
-    GitToolbar: class { reset() {} }, worktreeRows: () => [], FileActions: class { reset() {} }, CommitGenerator: class {}, StashPanel: class { reset() {} },
+    GitToolbar: class { reset() {} }, worktreeRows: () => [], FileActions: class { reset() {} }, CommitGenerator: class {}, StashPanel: class { reset() {} }, GithubPanel: class { reset() {} },
     exec: async (program, args, options) => {
       commands.push({ program, args: [...args], options });
       if (program === 'python3') { discoveryRuns++; return { code: 0, stdout: JSON.stringify({ repositories: [

@@ -8,10 +8,15 @@ import search
 import tasks
 import review
 import assets
+import github
 
 
 def dispatch(action, request):
     home = state_home(request)
+    if action.startswith('github_'):
+        return github.handle(action, request, home)
+    if action == 'review_pr': return review.pr(request, home)
+    if action == 'review_log': return review.failure_log(request, home)
     if action == 'search':
         return search.search(request, home)
     if action == 'search_cancel':
@@ -23,8 +28,6 @@ def dispatch(action, request):
         if action == 'review_apply': return review.apply(request, home)
         if action == 'review_compare': return review.compare(request)
         if action == 'review_branches': return review.branches(request)
-        if action == 'review_pr': return review.pr(request, home)
-        if action == 'review_log': return review.failure_log(request, home)
         if action.startswith('task'):
             return tasks.handle(action, request, home)
         if action.startswith('document_'):
