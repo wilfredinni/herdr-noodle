@@ -1,5 +1,5 @@
 import { div } from "gpui-kit";
-import { h_flex, v_flex, Editor, EditorState, Button } from "gpui-base";
+import { h_flex, v_flex, Editor, EditorState, Input, InputState, Button } from "gpui-base";
 import { exec, appHome, writeTextFile, settings, shared, setShared, panes, run, theme } from "herdr";
 import { lineChanges } from "./gutter.js";
 
@@ -20,7 +20,49 @@ export class Documents {
   constructor(owner, cx) {
     this.owner = owner; this.open = new Map();
     cx.bind_keys?.(["cmd-s", "ctrl-s"].map(keystroke => ({ keystroke, action: "noodle.save", context: "NoodleEditor" })));
+    cx.bind_keys?.(["cmd-f", "ctrl-f"].map(keystroke => ({ keystroke, action: "noodle.find", context: "NoodleEditor > Input" })));
+    this.query = InputState.new({ placeholder: "Find in file" });
+    this.query.on("change", (_e, cx) => this.find(cx));
+    this.query.on("submit", (e, cx) => this.find(cx, e.shift ? -1 : 1));
     cx.timer.every(500, cx => this.requests(cx));
+  }
+  showFind(cx) {
+    this.findOpen = true;
+    this.find(cx);
+    this.query.focus();
+    this.query.set_selected_range({ start: 0, end: this.query.value().length });
+    cx.notify();
+  }
+  closeFind(cx) {
+    this.findOpen = false;
+    const input = this.frozen || this.current?.input;
+    input?.close_search?.();
+    if (this.frozen) this.current?.input.close_search?.();
+    input?.focus();
+    cx.notify();
+  }
+  find(cx, direction = 0) {
+    const input = this.frozen || this.current?.input, query = this.query.value();
+    if (!input) return;
+    if (typeof input.search === "function") {
+      const label = input.search(query, direction);
+      this.noMatch = Boolean(query) && label === "0/0";
+      cx.notify(); return;
+    }
+    const text = input.value(), range = input.selected_range();
+    let at = -1;
+    if (query) {
+      if (direction < 0) {
+        if (range.start > 0) at = text.lastIndexOf(query, range.start - 1);
+        if (at < 0) at = text.lastIndexOf(query);
+      } else {
+        at = text.indexOf(query, direction > 0 ? range.start + 1 : range.start);
+        if (at < 0) at = text.indexOf(query);
+      }
+      if (at >= 0) input.set_selected_range({ start: at, end: at + query.length });
+    }
+    this.noMatch = Boolean(query) && at < 0;
+    cx.notify();
   }
   job(cx, task) {
     if (this.busy) return;
@@ -36,8 +78,8 @@ export class Documents {
     const s = this.owner.selection;
     if (!s?.file || s.on || s.hash || s.diffMode === "staged" || s.file.status === "D") return;
     const existing = [...this.open.values()].find(d => (d.selection.root === s.root || d.root === s.root) && d.path === s.file.path);
-    if (this.current !== existing) { this.compare = null; this.confirmDiscard = false; this.error = null; }
-    if (existing) { this.current = existing; this.owner.mode = "source"; this.checkpoint(existing, cx); cx.notify(); return; }
+    if (this.current !== existing) { this.current?.input.close_search?.(); this.compare = null; this.confirmDiscard = false; this.error = null; }
+    if (existing) { this.current = existing; this.owner.mode = "source"; if (this.findOpen) this.find(cx); this.checkpoint(existing, cx); cx.notify(); return; }
     this.current = null; this.owner.mode = "source";
     if (this.busy) { this.pendingEdit = s; cx.notify(); return; }
     this.job(cx, async cx => {
@@ -65,6 +107,7 @@ export class Documents {
         });
       }
       this.current = doc; this.owner.mode = "source";
+      if (this.findOpen) this.find(cx);
       this.publish(doc); cx.notify();
       await this.refreshGutter(doc);
     });
@@ -163,7 +206,7 @@ export class Documents {
       cx.spawn(async cx => { for (const doc of this.open.values()) { try { const fresh = await call("document_open", { root: doc.root, path: doc.path }); if (fresh.base === doc.inputValue) { doc.base = fresh.base; doc.dirty = rawText(doc.input.value(), doc) !== doc.base; this.publish(doc); } } catch (e) { this.error = e.message; } } cx.notify(); }); cx.notify(); }
     if (!request || request.id === this.request || this.busy) return;
     this.request = request.id;
-    if (this.current) { this.frozen?.release(); this.frozen = EditorState.new({ value: this.current.input.value(), readonly: true, line_numbers: true, font_size: 13 }); cx.notify(); }
+    if (this.current) { this.frozen?.release(); this.frozen = EditorState.new({ value: this.current.input.value(), readonly: true, line_numbers: true, font_size: 13 }); if (this.findOpen) this.find(cx); cx.notify(); }
     cx.spawn(async cx => {
       try {
         for (const doc of this.open.values()) await this.flush(doc);
@@ -198,7 +241,16 @@ export class Documents {
     if (!doc) return div().flex_1().p(16).child(this.error || "Opening editor…");
     this.applyGutter(doc, t);
     const button = (id, label, fn, disabled = this.busy || Boolean(this.frozen)) => Button.new(id).h(28).px(8).rounded(5).text_size(12).child(label).disabled(disabled).on_click((_e, cx) => fn(cx));
-    return v_flex().flex_1().min_h(0).key_context("NoodleEditor").on_action("noodle.save", (_e, cx) => { this.save(cx); cx.stop_propagation(); })
+    return v_flex().flex_1().min_h(0).key_context("NoodleEditor")
+      .on_action("noodle.find", (_e, cx) => { this.showFind(cx); cx.stop_propagation(); })
+      .on_action("noodle.save", (_e, cx) => { this.save(cx); cx.stop_propagation(); })
+      .when(this.findOpen, el => el.child(h_flex().px(12).py(6).gap(6).items_center().border_b(1).border_color(t.border).bg(t.background)
+        .on_key_down((e, cx) => { if (e.keystroke === "escape") { this.closeFind(cx); cx.stop_propagation(); } })
+        .child(Input.new(this.query).flex_1().min_w(0).h(28).accessibility_label("Find in file (case sensitive)"))
+        .when(this.noMatch, el => el.child(div().text_color(t.muted).child("No matches")))
+        .child(button("find-previous", "Previous", cx => this.find(cx, -1), !this.query.value()))
+        .child(button("find-next", "Next", cx => this.find(cx, 1), !this.query.value()))
+        .child(button("close-find", "Close", cx => this.closeFind(cx), false))))
       .when(this.confirmDiscard, el => el.child(h_flex().px(12).py(8).gap(8).child(div().flex_1().child("Discard this draft and reload the saved file?"))
         .child(button("cancel-discard", "Cancel", cx => { this.confirmDiscard = false; cx.notify(); })).child(button("confirm-discard", "Discard draft", cx => this.discard(cx)))))
       .when(Boolean(this.error), el => el.child(div().px(16).py(8).text_color(t.ansi1).child(this.error)))

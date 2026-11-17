@@ -1,0 +1,138 @@
+--- a/defaults/AGENTS.md
++++ b/defaults/AGENTS.md
+@@ -1019,7 +1019,7 @@
+ keyword: theme().ansi5, ... } })` + `Editor.new(state)` is a code view (readonly)
+ or editor with syntax highlighting, line numbers and folding. A viewer opens
+ beside the shell as a pane: `pane.split {direction, mod, props: { file }}`.
+-The full surface is in `gpui-kit.d.ts` next to this file.
++The full surface is in `gpui-kit.d.ts` next to this file. `EditorState.search(query, direction)` highlights literal, case-sensitive matches and returns `current/total`; direction is -1, 0 or 1. `close_search()` clears the match highlights.
+ 
+ ### The `herdr` module
+ 
+--- a/defaults/herdr.d.ts
++++ b/defaults/herdr.d.ts
+@@ -20,6 +20,8 @@
+ export function home(): string;
+ /** The app's folder (`~/.config/herdr-app`, or `$HERDR_APP_HOME`): settings.json, keys.json, layouts/. */
+ export function appHome(): string;
++/** True in a mod check, whose shared state is isolated and read-only. */
++export function checking(): boolean;
+ 
+ /** Reads UTF-8 text (up to 1 MiB), or null if absent. Runs off the UI thread.
+  *  `on`: from that machine (a space's `machine`). */
+--- a/src/mods.rs
++++ b/src/mods.rs
+@@ -963,6 +963,7 @@
+         .async_function("hc", |a| Ok(exec_future("hc".into(), strings(a.get(0)), None, None, EXEC_LIMIT)))
+         .function("home", |_| Ok(home().to_string_lossy().into_owned().into()))
+         .function("appHome", |_| Ok(app_dir().to_string_lossy().into_owned().into()))
++        .function("checking", |_| Ok(HostValue::Bool(SHARED.with_borrow(|store| store.as_ref().is_some_and(|store| !store.writable)))))
+         .function("fonts", |_| Ok(to_host(&json!(*FONTS.lock().unwrap()))))
+         .function("updates", |_| Ok(to_host(&crate::update::status())))
+         .function("presentUpdateNotes", |a| {
+--- a/vendor/gpui-kit/crates/base/src/input/base/element.rs
++++ b/vendor/gpui-kit/crates/base/src/input/base/element.rs
+@@ -3129,20 +3129,23 @@
+             window.paint_path(path.clone(), *color);
+         }
+ 
++        // Search remains visible while the find field or another window has focus.
++        let secondary_selection = Hsla {
++            s: 0.1,
++            ..editor_style.selection
++        };
++        let search_match = gpui::hsla(0.12, 1.0, 0.5, 0.22);
++        let active_search_match = gpui::hsla(0.07, 1.0, 0.5, 0.4);
++        for (path, is_active) in &prepaint.search_match_paths {
++            window.paint_path(path.clone(), if *is_active {
++                active_search_match
++            } else {
++                search_match
++            });
++        }
++
+         // Paint selections
+         if window.is_window_active() {
+-            let secondary_selection = Hsla {
+-                s: 0.1,
+-                ..editor_style.selection
+-            };
+-            for (path, is_active) in prepaint.search_match_paths.iter() {
+-                window.paint_path(path.clone(), secondary_selection);
+-
+-                if *is_active {
+-                    window.paint_path(path.clone(), editor_style.selection);
+-                }
+-            }
+-
+             for path in prepaint.selection_paths.drain(..) {
+                 window.paint_path(path, editor_style.selection);
+             }
+--- a/vendor/gpui-kit/crates/shell/src/engine/quickjs/mod.rs
++++ b/vendor/gpui-kit/crates/shell/src/engine/quickjs/mod.rs
+@@ -7158,6 +7158,8 @@
+         return {
+           __handle: handle,
+           set_gutter_marks: (marks) => __editor_text_call(handle, "set_gutter_marks", [JSON.stringify(marks)]),
++          search: (query, direction = 0) => __editor_text_call(handle, "search", [String(query), direction]),
++          close_search: () => __editor_text_call(handle, "close_search", []),
+           selected_range: () => __editor_text_call(handle, "selected_range", []),
+           set_selected_range: (range) => __editor_text_call(handle, "set_selected_range", [range]),
+           replace: (text) => __editor_text_call(handle, "replace", [String(text)]),
+--- a/vendor/gpui-kit/crates/shell/src/input_tokens.rs
++++ b/vendor/gpui-kit/crates/shell/src/input_tokens.rs
+@@ -309,6 +309,8 @@
+ /// HERDR: the selection operations of a source editor, so scripts can format
+ /// the selection. Editors have no inline tokens.
+ pub(crate) const EDITOR_METHODS: &[(&str, bool)] = &[
++    ("search", false),
++    ("close_search", false),
+     ("selected_range", true),
+     ("set_selected_range", false),
+     ("replace", false),
+@@ -352,6 +354,32 @@
+         ("replace", [text]) => {
+             let text = string(text)?;
+             entity.update(cx, |state, cx| state.replace(text, window, cx));
++            Ok(Data::Null)
++        }
++        ("search", [query, Data::Number(direction)]) => {
++            let query = string(query)?;
++            if !matches!(*direction, -1.0 | 0.0 | 1.0) {
++                bail!("search direction must be -1, 0 or 1");
++            }
++            let label = entity.update(cx, |state, cx| {
++                state.set_search_query(query, false, cx);
++                let range = if *direction < 0.0 {
++                    state.previous_search_match(cx)
++                } else if *direction > 0.0 {
++                    state.next_search_match(cx)
++                } else {
++                    let matcher = &state.search_session().matcher;
++                    matcher.current().map(|ix| matcher.matched_ranges()[ix].clone())
++                };
++                if let Some(range) = range {
++                    state.set_selected_range(range, cx);
++                }
++                state.search_session().matcher.label()
++            });
++            Ok(Data::String(label))
++        }
++        ("close_search", []) => {
++            entity.update(cx, |state, cx| state.close_search(cx));
+             Ok(Data::Null)
+         }
+         ("set_gutter_marks", [value]) => {
+--- a/vendor/gpui-kit/crates/shell/src/typings.rs
++++ b/vendor/gpui-kit/crates/shell/src/typings.rs
+@@ -3201,6 +3201,10 @@
+ 
+   // HERDR: built-in source editing and read-only code viewing.
+   export interface EditorState {
++    /** Highlight literal, case-sensitive matches; -1/1 navigates, 0 keeps the current match. Returns current/total. */
++    search(query: string, direction?: -1 | 0 | 1): string;
++    /** Clear match highlights while retaining the query for the next search. */
++    close_search(): void;
+     /** Marks follow buffer lines through scrolling and folding. Lines are one-based. */
+     set_gutter_marks(marks: Array<{ line: number; color?: string; deleted_before?: string; deleted_after?: string }>): void;
+     value(): string;

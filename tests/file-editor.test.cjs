@@ -10,7 +10,7 @@ function harness(t, raw='﻿first\tline\r\nlast', gutter=false) {
   const home=path.join(base,'app'), root=path.join(base,'repo');fs.mkdirSync(root);fs.mkdirSync(home);fs.cpSync(path.join(__dirname,'../helpers'),path.join(home,'helpers'),{recursive:true});fs.writeFileSync(path.join(root,'file.txt'),raw);
   const jobs=[],timers=[],state=new Map(),calls=[],commands=[],bindings=[];
   const cx={notify(){},bind_keys(keys){bindings.push(...keys);},spawn(fn){jobs.push(fn(cx));},timer:{every(){},after(ms,fn){timers.push(fn);}}};
-  const input=options=>{let value=options?.value||'', handlers={};return {options,value:()=>value,set_value:v=>{value=v;},on:(e,fn)=>{handlers[e]=fn;},emit:()=>handlers.change?.({},cx),release(){},...(gutter?{set_gutter_marks(marks){this.marks=marks;}}:{}),selected_range:()=>({start:0,end:5})};};
+  const input=options=>{let value=options?.value||'', handlers={},range={start:0,end:5};return {options,value:()=>value,set_value:v=>{value=v;},on:(e,fn)=>{handlers[e]=fn;},emit:()=>handlers.change?.({},cx),release(){},...(gutter?{set_gutter_marks(marks){this.marks=marks;}}:{}),selected_range:()=>range,set_selected_range:r=>{range=r;},focus(){this.focused=true;},submit:e=>handlers.submit?.(e,cx)};};
   const element=id=>{let p;const node={id,nodes:[],attrs:{}};return p=new Proxy(node,{get:(n,k)=>k in n?n[k]:k==='when'?(b,fn)=>(b&&fn(p),p):k==='child'?c=>(n.nodes.push(c),p):k==='children'?a=>(n.nodes.push(...a),p):(...args)=>(n.attrs[k]=args,p)});};
   const context=vm.createContext({console,Map,Date,Math,Error,div:element,svg:element,h_flex:element,v_flex:element,Button:{new:element},Editor:{new:element},Input:{new:element},EditorState:{new:input},InputState:{new:input},
     theme:()=>({ansi1:"#ff0000",ansi2:"#00ff00",ansi3:"#ffff00"}),appHome:()=>home,settings:()=>({}),shared:k=>state.get(k),setShared:(k,v)=>state.set(k,v),panes:()=>[{mod:'file-editor',pane:'editor',tab:'one'}],run:(...args)=>commands.push(args),
@@ -66,7 +66,8 @@ test('editor has no controls toolbar and keeps Ctrl+S/Cmd+S saving',async t=>{
  const find=(n,id)=>n?.id===id?n:n?.nodes?.map(c=>find(c,id)).find(Boolean);
  const tree=h.docs.render({},h.cx);
  for(const id of [`open-${doc.id}`,`close-${doc.id}`,'save-file','close-open-file','save-file-as','discard-draft','find-file','goto-line','copy-reference','copy-selection','file-notes','copy-for-agent'])assert.equal(find(tree,id),undefined,id);
- assert.deepEqual(Array.from(h.bindings,b=>b.keystroke).sort(),['cmd-s','ctrl-s']);
+ assert.deepEqual(Array.from(h.bindings,b=>b.keystroke).sort(),['cmd-f','cmd-s','ctrl-f','ctrl-s']);
+ assert.ok(h.bindings.filter(b=>b.action==='noodle.find').every(b=>b.context==='NoodleEditor > Input'),'find must override the native Input binding');
  doc.input.set_value('saved by keyboard');doc.input.emit();
  tree.attrs.on_action[1]({}, {...h.cx,stop_propagation(){}});await h.flush();
  assert.equal(fs.readFileSync(path.join(h.root,'file.txt'),'utf8'),'saved by keyboard');assert.equal(doc.dirty,false);
@@ -126,4 +127,46 @@ test('typing publishes only dirty-state transitions while preserving checkpoints
  assert.equal(publications,1);assert.equal(notifications,1);assert.equal(doc.change,100);
  await h.docs.flush(doc);assert.equal(fs.readFileSync(doc.inputPath,'utf8'),'edit 99');
  doc.input.set_value('base');doc.input.emit();assert.equal(publications,2);assert.equal(doc.dirty,false);
+});
+
+
+test('find selects literal UTF-16 matches, wraps both ways and leaves the draft unchanged',async t=>{
+ const h=harness(t,'😀 match first\nmatch last');await h.edit();const doc=h.docs.current;
+ doc.input.set_selected_range({start:0,end:0});h.docs.showFind(h.cx);
+ assert.equal(h.docs.findOpen,true);assert.equal(h.docs.query.focused,true);
+ h.docs.query.set_value('match');h.docs.query.emit();
+ assert.equal(doc.input.selected_range().start,3);
+ h.docs.query.submit({});assert.equal(doc.input.selected_range().start,15);
+ h.docs.query.submit({});assert.equal(doc.input.selected_range().start,3);
+ h.docs.query.submit({shift:true});assert.equal(doc.input.selected_range().start,15);
+ h.docs.query.set_value('MATCH');h.docs.query.emit();assert.equal(h.docs.noMatch,true);
+ assert.equal(doc.input.selected_range().start,15);
+ h.docs.query.set_value('');h.docs.query.emit();assert.equal(h.docs.noMatch,false);
+ h.docs.query.set_value('😀');h.docs.query.emit();assert.equal(doc.input.selected_range().end,2);
+ h.docs.find(h.cx,-1);assert.equal(doc.input.selected_range().start,0);
+ h.docs.closeFind(h.cx);assert.equal(h.docs.findOpen,false);assert.equal(doc.input.focused,true);
+ assert.equal(doc.input.value(),h.raw);assert.equal(doc.dirty,false);
+});
+
+test('find uses the current buffer and supports the readonly file-operation snapshot',async t=>{
+ const h=harness(t,'base');await h.edit();const doc=h.docs.current;
+ doc.input.set_value('draft match');doc.input.emit();h.docs.query.set_value('match');h.docs.find(h.cx);
+ assert.equal(doc.input.selected_range().start,6);
+ h.state.set('noodle.documents.request',{id:'find-snapshot'});h.docs.requests(h.cx);await h.flush();
+ h.docs.find(h.cx);assert.equal(h.docs.frozen.selected_range().start,6);
+ assert.equal(fs.readFileSync(path.join(h.root,'file.txt'),'utf8'),'base');
+});
+
+
+test('native search drives highlights independently of the focused find field and clears them on close',async t=>{
+ const h=harness(t,'match match');await h.edit();const input=h.docs.current.input,calls=[];
+ input.search=(query,direction)=>{calls.push([query,direction]);return query==='missing'?'0/0':'1/2';};
+ input.close_search=()=>calls.push('close');
+ h.docs.query.set_value('match');h.docs.showFind(h.cx);
+ assert.deepEqual(calls,[['match',0]]);assert.equal(h.docs.query.focused,true);
+ h.docs.find(h.cx,1);h.docs.find(h.cx,-1);
+ assert.deepEqual(calls.slice(-2),[['match',1],['match',-1]]);
+ h.docs.query.set_value('missing');h.docs.find(h.cx);assert.equal(h.docs.noMatch,true);
+ h.docs.closeFind(h.cx);assert.equal(calls.at(-1),'close');assert.equal(input.focused,true);
+ assert.equal(input.value(),'match match');assert.equal(h.docs.current.dirty,false);
 });

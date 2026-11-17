@@ -29,6 +29,8 @@ Tested on **macOS with Herdr 0.1.15**. Required: Git, Python **3.9+**, and ripgr
 - The footer shows compact subscription usage meters with consistent green, warning, and red colors.
 
 The file editor supports local UTF-8 text files up to 1 MiB. It keeps recovery drafts and refuses to overwrite external edits until you review the saved version. Remote files and binary files cannot be edited.
+Cmd+F / Ctrl+F opens case-sensitive text search in the editor. Enter / Shift+Enter moves between matches, wrapping at either end; Escape closes the find field. Cmd+S / Ctrl+S saves.
+Highlighting every match in yellow and the current match in orange requires the optional [native search bridge](native/README.md). Released Herdr builds without that bridge use selection-only search.
 
 Working-file previews ignore unrelated folder changes and defer refreshes while their tab is hidden.
 The Changes preview includes Diff, Source and rendered Markdown tabs, unified or aligned split diffs,
