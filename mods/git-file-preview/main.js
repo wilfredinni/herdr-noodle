@@ -4,11 +4,14 @@ import { shared, exec, readTextFile, watchFolder, theme, settings, props, focuse
 import { Review } from "./review.js";
 import { readDiff, readFile, readMarkdown, isMarkdown, splitRows, git } from "./content.js";
 import { fileIcon } from "./fileIcons.js";
+import { PreviewSearch } from "./search.js";
+import * as previewNative from "gpui-base";
 
 export default class FilePreview extends View {
   init(_props, cx) {
     this.selectionKey = props()?.selectionKey || _props?.selectionKey || "git-file-preview.unselected"; this.rows = []; this.mode = "diff"; this.version = 0;
     this.layout = "unified";
+    this.search = new PreviewSearch(this, cx);
     if (typeof Review !== "undefined") { this.review = new Review(this, cx); this.scroll = VirtualListScrollHandle.new(); }
     const owners = shared("noodle.documents") || {};
     if (Object.values(owners).some(doc => doc.key === this.selectionKey))
@@ -60,6 +63,7 @@ export default class FilePreview extends View {
       const previous = this.selection;
       const sameFile = previous && previous.root === selection.root && previous.on === selection.on && previous.file?.path === selection.file?.path && previous.hash === selection.hash && previous.kind === selection.kind && previous.diffMode === selection.diffMode;
       if (!sameFile) this.mode = /\.(png|jpe?g|svg)$/i.test(selection.file?.path || "") && !selection.on && !selection.hash ? "asset" : selection.kind === "file" ? "source" : "diff";
+      this.markdownView?.release(); this.markdownView = null;
       this.asset = null; this.source = null; this.sourceWidth = null; this.sourceError = null; this.sourceLoading = false; this.menuOpen = false; this.menuConfirmation = null; this.conflict = null; this.liveFile = null;
       this.rows = []; this.result = null; this.markdown = null; this.markdownError = null;
     }
@@ -102,6 +106,7 @@ export default class FilePreview extends View {
       finally {
         if (version === this.version) {
           this.loading = false;
+          if (changed && this.search.open) this.search.find(cx);
           if (changed) cx.notify();
           if (this.dirty && this.active()) this.refresh(cx, true);
         }
@@ -117,9 +122,11 @@ export default class FilePreview extends View {
       const result = await readMarkdown(this.selection, { exec, readTextFile });
       if (version === this.version && (this.markdown?.text !== result.text || this.markdown?.truncated !== result.truncated || this.markdown?.deleted !== result.deleted)) {
         this.markdown = result; this.markdownVersion = (this.markdownVersion ?? 0) + 1; changed = true;
+        this.markdownView?.release();
+        this.markdownView = typeof previewNative !== "undefined" && previewNative.TextViewState ? previewNative.TextViewState.markdown(result.text) : null;
       }
-    } catch (error) { if (version === this.version) { this.markdown = null; this.markdownError = String(error); changed = true; } }
-    finally { if (version === this.version) { this.markdownLoading = false; if (changed) cx.notify(); } }
+    } catch (error) { if (version === this.version) { this.markdownView?.release(); this.markdownView = null; this.markdown = null; this.markdownError = String(error); changed = true; } }
+    finally { if (version === this.version) { this.markdownLoading = false; if (changed && this.search.open && this.mode === "markdown") this.search.find(cx); if (changed) cx.notify(); } }
   }
 
   async loadSource(cx) {
@@ -130,10 +137,10 @@ export default class FilePreview extends View {
       const result = await readFile(this.selection, { exec, readTextFile }, this.source);
       if (version === this.version && result !== this.source) { changed = true; this.source = result; this.sourceWidth = Math.max(300, ...result.rows.map(row => row.text.length * 7 + 72)); }
     } catch (error) { if (version === this.version) { changed = true; this.source = null; this.sourceError = String(error); } }
-    finally { if (version === this.version) { this.sourceLoading = false; if (changed) cx.notify(); } }
+    finally { if (version === this.version) { this.sourceLoading = false; if (changed && this.search.open && this.mode === "source") this.search.find(cx); if (changed) cx.notify(); } }
   }
 
-  close() { this.watched = null; }
+  close() { this.watched = null; this.markdownView?.release(); }
 
   async loadAsset(cx) {
     const version = this.version;
@@ -183,6 +190,7 @@ export default class FilePreview extends View {
     if (mode === "asset") cx.spawn(async cx => { try { await this.loadAsset(cx); } catch (e) { this.error = e.message; cx.notify(); } });
     if (mode === "source" && this.selection.kind !== "file" && !this.source && !this.sourceLoading) cx.spawn(cx => this.loadSource(cx));
     if (mode === "markdown" && !this.markdown && !this.markdownLoading) cx.spawn(cx => this.loadMarkdown(cx));
+    if (this.search.open) this.search.find(cx);
     cx.notify();
   }
 
@@ -232,13 +240,14 @@ export default class FilePreview extends View {
   }
 
   code(row, t) {
+    if (this.search) return this.search.paint(row?.text || " ", row, row?.spans, t).flex_1().font_normal();
     return h_flex().flex_1().min_w(0).font_normal().children((row?.spans || [{ text: row?.text || " ", color: null }]).map(span =>
       div().flex_none().text_color(typeof span.color === "number" ? t[`ansi${span.color}`] : span.color || t.foreground).child(span.text)));
   }
 
   diffRow(row, t, source = false) {
     const { kind, number, text, change, deletedBefore, deletedAfter } = row;
-    if (kind === "@") return div().w_full().px(16).h(24).flex_none().truncate().bg(t.ansi4 + "12").text_color(t.ansi4).child(text);
+    if (kind === "@") return div().w_full().px(16).h(24).flex_none().truncate().bg(t.ansi4 + "12").text_color(t.ansi4).child(this.search ? this.search.paint(text, row, null, t, t.ansi4) : text);
     return h_flex().w_full().h(24).flex_none()
       .when(kind === "+", el => el.bg(t.ansi2 + "18")).when(kind === "-", el => el.bg(t.ansi1 + "18"))
       .when(!source, el => el.child(this.number(row.oldNumber, t)))
@@ -357,6 +366,8 @@ export default class FilePreview extends View {
     const extension = file?.path.split(".").pop().toLowerCase();
     const language = ({ js: "JavaScript", jsx: "JavaScript", ts: "TypeScript", tsx: "TypeScript", py: "Python", md: "Markdown", json: "JSON", rs: "Rust", css: "CSS", html: "HTML", sh: "Shell", yml: "YAML", yaml: "YAML", toml: "TOML" })[extension] || "Plain text";
     return v_flex().id("file-preview").size_full().min_w(0).min_h(0).bg(t.canvas).text_color(t.foreground).text_size(12)
+      .track_focus(this.search.focus).key_context("NoodlePreview")
+      .on_action("noodle.preview.find", (_e, cx) => { if (file && this.mode !== "asset") this.search.show(cx); cx.stop_propagation(); })
       .child(h_flex().h(58).flex_none().px(14).gap(10).items_center().border_b(1).border_color(t.border).bg(t.background)
         .child(this.iconButton("close-preview", "Close preview", "mods/pane/close.svg", () => this.closePreview(), t))
         .child(svg(icon.path).id("preview-file-icon").size(16).flex_none().text_color(t[icon.color]))
@@ -378,6 +389,7 @@ export default class FilePreview extends View {
         .child(div().flex_none().text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().flex_none().text_size(11).text_color(t.ansi1).child(`−${del}`))
         .child(div().flex_1())
         .when(this.mode === "diff", el => el.child(this.segments("diff-layout", [["unified", "Unified"], ["split", "Split"]], this.layout, (layout, cx) => { this.layout = layout; cx.notify(); }, t)))))
+      .when(this.search.open && this.mode !== "asset", el => el.child(this.search.render(t)))
       .when(this.mode === "asset", el => el.child(div().flex_1().min_h(0).id("asset-preview").overflow_scrollbar().p(20).child(this.asset ? image(this.asset.path).w(Math.min(720, this.asset.width)).h(Math.min(720, this.asset.width) * this.asset.height / this.asset.width) : div().text_color(t.muted).child(this.error || "Loading image…"))))
       .when(this.mode === "review", el => el.child(this.review.render(t, cx)))
       .when(this.mode !== "markdown" && this.mode !== "review" && this.mode !== "asset", el => el
@@ -385,6 +397,7 @@ export default class FilePreview extends View {
           .child(div().flex_1().px(14).border_r(1).border_color(t.border).child(s.hash ? "Parent · before" : s.diffMode === "staged" || s.diffMode === "all" ? "HEAD · before" : "Index · before"))
           .child(div().flex_1().px(14).child(s.hash ? "Commit · after" : s.diffMode === "staged" ? "Index · after" : "Working tree · after"))))
         .child(div().flex_1().min_h(0).relative().font_family(settings().font_family ?? "JetBrains Mono").text_size(12).line_height("24px")
+          .on_mouse_down("left", () => this.search.focus.focus())
           .child(div().id("file-diff-x").size_full().overflow_x_scrollbar()
             .child(div().w_full().min_w(split ? 700 : sourceMode ? this.sourceWidth || this.diffWidth || 300 : (this.diffWidth || 300) + 50).h_full()
               .child(v_virtual_list("file-diff", split ? this.split?.length || 0 : rows.length, 24, i => String(i), range => split
@@ -398,10 +411,10 @@ export default class FilePreview extends View {
         .when(Boolean(result?.truncated), el => el.child(div().px(16).py(8).text_size(11).text_color(t.muted).child(sourceMode ? "Source preview limited to 5,000 lines or 400,000 characters" : "Showing the first 1,500 diff lines"))))
       .when(this.mode === "markdown", el => el
         .when(Boolean(this.markdown?.deleted), el => el.child(div().px(20).py(8).text_size(11).text_color(t.muted).border_b(1).border_color(t.border).child("Deleted file · showing its previous version")))
-        .child(v_flex().id("markdown-document").flex_1().min_h(0).overflow_y_scrollbar().px(32).py(28).items_center()
+        .child(v_flex().id("markdown-document").flex_1().min_h(0).when(!this.markdownView, el => el.overflow_y_scrollbar()).px(32).py(28).items_center()
           .when(!this.markdown, el => el.child(div().w_full().text_color(this.markdownError ? t.ansi1 : t.muted).child(this.markdownError || "Rendering Markdown…")))
-          .when(Boolean(this.markdown), el => el.child(div().w_full().max_w(760).font_normal().text_size(14).line_height("24px").font_family(settings().ui_font ?? "Geist")
-            .child(TextView.markdown(`markdown-${this.context}-${this.markdownVersion}`, this.markdown.text || "*This document is empty.*").selectable(true).scrollable(false).w_full().text_color(t.foreground)))))
+          .when(Boolean(this.markdown), el => el.child(div().w_full().max_w(760).when(Boolean(this.markdownView), el => el.h_full().min_h(0)).font_normal().text_size(14).line_height("24px").font_family(settings().ui_font ?? "Geist")
+            .child((this.markdownView ? TextView.new(this.markdownView).size_full() : TextView.markdown(`markdown-${this.context}-${this.markdownVersion}`, this.markdown.text || "*This document is empty.*")).selectable(true).scrollable(Boolean(this.markdownView)).w_full().text_color(t.foreground)))))
         .when(this.markdown?.truncated, el => el.child(div().px(20).py(8).text_size(11).text_color(t.muted).child("Markdown preview limited to the first 200,000 characters"))))
       .when(Boolean(file), el => el.child(h_flex().h(28).flex_none().px(16).gap(14).items_center().border_t(1).border_color(t.border).text_size(11).text_color(t.muted)
         .child(div().child(language)).when(Boolean((this.mode === "markdown" ? this.markdown : result)?.lineEnding), el => el.child(div().child((this.mode === "markdown" ? this.markdown : result).lineEnding)))

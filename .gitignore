@@ -17,3 +17,5 @@ layouts/.state/
 *.old*
 mods/**/gpui-kit.d.ts
 mods/**/jsconfig.json
+native/**/gpui-kit.d.ts
+native/**/jsconfig.json

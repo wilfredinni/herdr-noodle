@@ -24,26 +24,26 @@ function element(id) {
 const find = (n, id) => n?.id === id ? n : n?.nodes?.map(child => find(child, id)).find(Boolean);
 const texts = n => typeof n === 'string' ? n : (n?.nodes || []).map(texts).join(' ');
 function harness(selection) {
-  const state = new Map([['selection', selection]]), jobs = [], calls = [];
-  const cx = { notify() {}, stop_propagation() {}, focus_handle: () => ({ focus() {} }), timer: { every() {} }, spawn(fn) { jobs.push(fn(cx)); } };
+  const state = new Map([['selection', selection]]), jobs = [], calls = [], bindings = [], scrolls = [];
+  const cx = { bind_keys(keys) { bindings.push(...keys); }, notify() {}, stop_propagation() {}, focus_handle: () => ({ focus() {} }), timer: { every() {} }, spawn(fn) { jobs.push(fn(cx)); } };
   const host = {
     exec: async (command, args, options) => { calls.push([command, args]); try { return { code: 0, stdout: execFileSync(command, args, { cwd: options.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) }; } catch (e) { return { code: e.status, stderr: e.stderr.toString() }; } },
     readTextFile: async file => fs.promises.readFile(file, 'utf8'),
   };
   const c = vm.createContext({ View: class {}, div: element, svg: source => { const icon = element(); icon.attrs.src = [source]; return icon; }, v_flex: element, h_flex: element,
     Button: { new: element }, Popover: { new: element }, Scrollbar: { vertical: element }, TextView: { markdown: element }, v_virtual_list: element,
-    Input: { new: element }, InputState: { new: () => { let value = ''; return { on() {}, set_value(next) { value = next; }, value: () => value }; } },
-    ScrollHandle: { new: () => ({ scroll_to_item() {} }) }, VirtualListScrollHandle: { new: () => ({}) }, appHome: () => '/fixture-app',
+    Input: { new: element }, InputState: { new: () => { let value = ''; return { on() {}, focus() {}, set_selected_range() {}, set_value(next) { value = next; }, value: () => value }; } },
+    ScrollHandle: { new: () => ({ scroll_to_item(index) { scrolls.push(index); } }) }, VirtualListScrollHandle: { new: () => ({ scroll_to_item(index) { scrolls.push(index); } }) }, appHome: () => '/fixture-app',
     props: () => ({ selectionKey: 'selection' }), shared: key => state.get(key), setShared: (key, value) => state.set(key, value),
     theme: () => new Proxy({}, { get: (_, key) => key }), settings: () => ({}), focused: () => ({ tab: 'tab' }), panes: () => [], run() {},
     ...host, highlightRows: async () => {},
   });
   load(c, 'gutter.js', ['lineChanges']); load(c, 'content.js', ['isMarkdown', 'splitRows', 'diffRows', 'readFile', 'readDiff', 'readSource', 'readMarkdown', 'git']);
-  load(c, 'review.js', ['Review']);
+  load(c, 'review.js', ['Review']); load(c, 'search.js', ['PreviewSearch']);
   load(c, 'fileIcons.js', ['fileIcon']);
   load(c, 'main.js', ['FilePreview']);
   const view = new c.FilePreview(); view.watch = () => {}; view.init({}, cx);
-  return { c, view, state, cx, host, calls, async flush() { while (jobs.length) await Promise.all(jobs.splice(0)); } };
+  return { c, view, state, cx, host, calls, bindings, scrolls, async flush() { while (jobs.length) await Promise.all(jobs.splice(0)); } };
 }
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herdr-preview-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -124,8 +124,8 @@ test('file hunks reuse colored diff rows and keep staging tokens when syntax hig
   h.c.exec = async () => ({ code: 0, stdout: JSON.stringify({ token: 'snapshot', mode: 'unstaged', hunks: ['@@ -1 +1 @@\n-old\n+new\n'] }) });
   h.view.selectMode('review', h.cx); await h.flush();
   assert.deepEqual(highlighted, ['unstaged']); assert.equal(h.view.review.hunks.token, 'snapshot');
-  let tree = h.view.render(h.cx), hunk = find(tree, 'review-hunk-0');
-  assert.equal(hunk.nodes[1].attrs.bg[0], 'ansi118'); assert.equal(hunk.nodes[2].attrs.bg[0], 'ansi218');
+  let tree = h.view.render(h.cx);
+  assert.equal(find(tree, 'review-hunk-0-row-1').nodes[0].attrs.bg[0], 'ansi118'); assert.equal(find(tree, 'review-hunk-0-row-2').nodes[0].attrs.bg[0], 'ansi218');
   assert.equal(h.view.review.hunks.rows[0][2].spans[0].color, 5);
   h.view.result = { rows: h.view.review.hunks.rows.flat() };
   h.c.highlightRows = async () => { throw new Error('bat unavailable'); };
@@ -211,4 +211,72 @@ test('empty commits show their metadata, and Source failures do not show an olde
   await h.flush(); assert.match(texts(h.view.render(h.cx)), /Empty commit.*This commit has no changed files/);
   h.state.set('selection', { root, file: { path: 'missing.txt', status: 'M' } }); h.view.refresh(h.cx); await h.flush();
   h.view.selectMode('source', h.cx); await h.flush(); assert.equal(h.view.source, null); assert.ok(h.view.sourceError);
+});
+
+
+function searchFixture(rows) {
+ const h=harness(null),s={root:'/fixture',kind:'diff',file:{path:'file.md',status:'M'}};
+ h.state.set('selection',s);Object.assign(h.view,{selection:s,root:s.root,context:JSON.stringify(s),rows,result:{rows},split:h.c.splitRows(rows),mode:'diff'});
+ return h;
+}
+function backgrounds(node) {return [...(node?.attrs?.bg?[node.attrs.bg[0]]:[]),...(node?.nodes||[]).flatMap(backgrounds)];}
+test('preview find highlights across syntax spans and navigates unified and split rows without changing content',()=>{
+ const rows=[{kind:'-',oldNumber:1,number:1,text:'😀 match before',spans:[{text:'😀 ma',color:4},{text:'tch before',color:2}]},{kind:'+',newNumber:1,number:1,text:'match after'}];
+ const h=searchFixture(rows),s=h.view.search;s.query.set_value('match');s.show(h.cx);
+ assert.equal(s.matches.length,2);assert.equal(s.matches[0].start,3);assert.equal(h.scrolls.at(-1),0);
+ const painted=h.view.code(rows[0],h.c.theme());assert.equal(texts(painted).replaceAll(' ',''),'😀matchbefore');
+ assert.ok(backgrounds(painted).includes('#ff6b0066'));
+ const colors=[];const walk=n=>{if(n?.attrs?.text_color)colors.push(n.attrs.text_color[0]);for(const c of n?.nodes||[])walk(c);};walk(painted);
+ assert.ok(colors.includes('ansi4'));assert.ok(colors.includes('ansi2'));
+ s.find(h.cx,1);assert.equal(s.at,1);assert.equal(h.scrolls.at(-1),1);assert.ok(backgrounds(h.view.code(rows[0],h.c.theme())).includes('#ffb80038'));
+ s.find(h.cx,1);assert.equal(s.at,0);s.find(h.cx,-1);assert.equal(s.at,1);
+ h.view.layout='split';s.find(h.cx);assert.equal(h.scrolls.at(-1),0);
+ assert.equal(rows[0].text,'😀 match before');assert.equal(h.calls.length,0);
+ s.close(h.cx);assert.equal(backgrounds(h.view.code(rows[0],h.c.theme())).length,0);
+ assert.ok(h.bindings.some(b=>b.keystroke==='cmd-f'&&b.context==='NoodlePreview > Input'));
+});
+test('find refreshes for Source and Review, and reveals the containing hunk',()=>{
+ const h=searchFixture([{kind:'+',text:'diff match'}]),s=h.view.search;s.query.set_value('match');s.show(h.cx);
+ const old=s.matches;s.sync();assert.equal(s.matches,old,'rendering must reuse the search index');
+ h.view.mode='source';h.view.source={rows:[{text:'source match',number:1}]};s.find(h.cx);assert.equal(s.matches[0].text,'source match');
+ h.view.mode='review';h.view.review.mode='hunks';h.view.review.hunks={hunks:['one','two'],rows:[[{text:'no hit'}],[{text:'review match'}]]};
+ s.find(h.cx);assert.equal(s.matches.length,1);assert.equal(h.scrolls.at(-1),4);assert.ok(backgrounds(h.view.review.render(h.c.theme(),h.cx)).includes('#ff6b0066'));
+ h.view.review.hunks={hunks:[],rows:[]};s.find(h.cx);assert.equal(s.matches.length,0);
+ h.view.mode='source';h.view.source={rows:[{text:'MATCH'}]};s.find(h.cx);assert.equal(s.matches.length,0,'literal search is case sensitive');
+});
+test('Review search includes comparison files, PR reviews, check names and failure logs',()=>{
+ const h=searchFixture([]),r=h.view.review,s=h.view.search;h.view.mode='review';r.mode='compare';
+ r.comparison={base:'a'.repeat(40),head:'b'.repeat(40),files:[{status:'M',path:'match.js'}]};s.query.set_value('match');s.show(h.cx);assert.equal(s.matches[0].block,2);
+ r.mode='pr';r.pr={number:1,title:'match title',headRefName:'branch',baseRefName:'main',headRefOid:'a'.repeat(40),localHead:'a'.repeat(40),reviews:[{author:{login:'person'},state:'COMMENTED',body:'match body'}],statusCheckRollup:[{name:'match check',status:'FAILURE'}]};r.log={text:'match log',head:'a'.repeat(40)};
+ s.find(h.cx);assert.equal(s.matches.length,5);assert.ok(backgrounds(r.render(h.c.theme(),h.cx)).includes('#ff6b0066'));
+ s.find(h.cx,-1);assert.equal(h.scrolls.at(-1),7);
+});
+test('formatted Preview delegates find and clearing to the retained Markdown view',()=>{
+ const h=searchFixture([]),s=h.view.search,calls=[];h.view.mode='markdown';h.view.markdownView={search:(...a)=>(calls.push(a),'2/3'),close_search:()=>calls.push('close')};
+ s.query.set_value('match');s.show(h.cx);s.find(h.cx,1);s.find(h.cx,-1);assert.deepEqual(calls,[['match',0],['match',1],['match',-1]]);
+ assert.match(texts(s.render(h.c.theme())),/2\/3/);h.view.markdownView.status=()=>"3/7";assert.match(texts(s.render(h.c.theme())),/3\/7/);s.close(h.cx);assert.equal(calls.at(-1),'close');
+});
+
+
+test('Review search reveals the actual row inside a hunk taller than the viewport',()=>{
+ const h=searchFixture([]),s=h.view.search;h.view.mode='review';h.view.review.mode='hunks';
+ const rows=Array.from({length:1000},(_,i)=>({kind:'+',number:i+1,newNumber:i+1,text:i===900?'target':'ordinary'}));
+ h.view.review.hunks={hunks:['large hunk'],rows:[rows],mode:'unstaged'};s.query.set_value('target');s.show(h.cx);
+ assert.equal(h.scrolls.at(-1),901);
+ let content=find(h.view.review.render(h.c.theme(),h.cx),'review-content');assert.match(texts(content.nodes[901]),/target/);
+ h.view.review.confirm=0;s.find(h.cx);assert.equal(h.scrolls.at(-1),902);
+ content=find(h.view.review.render(h.c.theme(),h.cx),'review-content');assert.match(texts(content.nodes[902]),/target/);
+});
+
+
+test('Review action bars use the measured pane width at the current app zoom',()=>{
+ const h=searchFixture([]),r=h.view.review;h.view.mode='review';r.mode='hunks';r.hunks={hunks:['one'],rows:[[{text:'long'.repeat(200)}]],mode:'unstaged'};
+ h.c.settings=()=>({zoom:1.25});const tree=r.render(h.c.theme(),h.cx);tree.handlers.size_change({width:640},h.cx);
+ const content=find(r.render(h.c.theme(),h.cx),'review-content');assert.equal(content.nodes[0].attrs.w[0],480);
+ assert.ok(find(content,'stage-hunk-0'));assert.ok(find(content,'discard-hunk-0'));
+});
+test('an unchanged preview refresh does not move an active find result',async t=>{
+ const root=fixture(t),h=harness({kind:'file',root,gitRoot:root,file:{path:'a.md'}});await h.flush();
+ h.view.search.query.set_value('before');h.view.search.show(h.cx);const scrolls=h.scrolls.length;
+ h.view.refresh(h.cx,true);await h.flush();assert.equal(h.scrolls.length,scrolls);
 });

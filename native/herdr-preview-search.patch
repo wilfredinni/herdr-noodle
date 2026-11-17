@@ -1,0 +1,274 @@
+--- a/defaults/AGENTS.md
++++ b/defaults/AGENTS.md
+@@ -1021,6 +1021,11 @@
+ beside the shell as a pane: `pane.split {direction, mod, props: { file }}`.
+ The full surface is in `gpui-kit.d.ts` next to this file. `EditorState.search(query, direction)` highlights literal, case-sensitive matches and returns `current/total`; direction is -1, 0 or 1. `close_search()` clears the match highlights.
+ 
++Rendered Markdown with search can retain `TextViewState.markdown(text)` and draw
++`TextView.new(state).scrollable(true)`. `state.value()` reads the rendered words;
++`state.search(query, direction)` highlights literal matches and returns `current/total`.
++Direction is -1, 0 or 1. `close_search()` clears highlights; `release()` releases the state.
++
+ ### The `herdr` module
+ 
+ All of it is in `herdr.d.ts`. In short:
+--- a/vendor/gpui-kit/crates/shell/src/engine/quickjs/entity_api.rs
++++ b/vendor/gpui-kit/crates/shell/src/engine/quickjs/entity_api.rs
+@@ -579,6 +579,40 @@
+         ),
+     )?;
+ 
++    let markdown_new = runtime.clone();
++    globals.set("__markdown_state_new", Func::from(move |ctx: Ctx<'_>, text: String| -> JsResult<EntityHandle> {
++        refuse_creation_in_render(&ctx, "TextViewState.markdown(...)")?;
++        let store = alive(&ctx, &markdown_new)?;
++        scope::with_current(|_, cx| store.entities().create_markdown(&text, scope::current_application_generation(), cx).map_err(|_| entity_limit_reached(&ctx)))
++            .ok_or_else(|| needs_call(&ctx, "TextViewState.markdown(...)"))?
++    }))?;
++    let markdown_call = runtime.clone();
++    globals.set("__markdown_call", Func::from(move |ctx: Ctx<'_>, handle: EntityHandle, method: String, query: String, direction: f64| -> JsResult<String> {
++        if method != "value" && method != "status" { refuse_mutation_in_render(&ctx, "Markdown search")?; }
++        if !matches!(direction, -1.0 | 0.0 | 1.0) { return Err(Exception::throw_type(&ctx, "search direction must be -1, 0 or 1")); }
++        let state = alive(&ctx, &markdown_call)?.entities().markdown(handle)
++            .ok_or_else(|| Exception::throw_type(&ctx, "Markdown state was released"))?;
++        scope::with_current(|_, cx| match method.as_str() {
++            "value" => Ok(state.read(cx).value(cx)),
++            "status" => Ok(state.read(cx).status()),
++            "search" => state.update(cx, |state, cx| state.search(&query, direction as i32, cx)).map_err(|e| Exception::throw_type(&ctx, &e.to_string())),
++            _ => Err(Exception::throw_type(&ctx, "unknown Markdown operation")),
++        }).ok_or_else(|| needs_call(&ctx, "Markdown search"))?
++    }))?;
++    let markdown_release = runtime.clone();
++    globals.set("__markdown_release", Func::from(move |handle: EntityHandle| -> bool {
++        markdown_release.upgrade().is_some_and(|runtime| runtime.entities().release(handle))
++    }))?;
++    let markdown_element = runtime.clone();
++    globals.set("__markdown_element", Func::from(move |ctx: Ctx<'_>, handle: EntityHandle| -> JsResult<SpecId> {
++        let store = alive(&ctx, &markdown_element)?;
++        if store.entities().markdown(handle).is_none() { return Err(Exception::throw_type(&ctx, "Markdown state was released")); }
++        Ok(store.push_component(Component::TextView(crate::spec::TextViewSpec {
++            state: Some(handle), id: format!("markdown-{handle}").into(), text: "".into(),
++            format: crate::spec::TextViewFormat::Markdown, policy: crate::scope::policy(),
++        })))
++    }))?;
++
+     // Sliders. A slider's value is retained for the same reason an input's
+     // text is, and for one more: a drag writes it from a GPUI listener with no
+     // script in the loop, so there is nowhere else it could live.
+--- a/vendor/gpui-kit/crates/shell/src/engine/quickjs/mod.rs
++++ b/vendor/gpui-kit/crates/shell/src/engine/quickjs/mod.rs
+@@ -1192,6 +1192,7 @@
+         "EditorState",
+         "Textarea",
+         "TextView",
++        "TextViewState",
+         "TextareaState",
+         "SliderState",
+         "Slider",
+@@ -7185,7 +7186,21 @@
+         ),
+     },
+     Textarea: { new: (state) => element(__textarea_element(state.__handle)) },
++    TextViewState: {
++      markdown: (text) => {
++        const handle = __markdown_state_new(String(text));
++        return {
++          __handle: handle,
++          value: () => __markdown_call(handle, "value", "", 0),
++          status: () => __markdown_call(handle, "status", "", 0),
++          search: (query, direction = 0) => __markdown_call(handle, "search", String(query), direction),
++          close_search: () => __markdown_call(handle, "search", "", 0),
++          release: () => __markdown_release(handle),
++        };
++      },
++    },
+     TextView: {
++      new: (state) => element(__markdown_element(state.__handle)),
+       html: (id, text) => element(__text_view(String(id), String(text), "html")),
+       markdown: (id, text) => element(__text_view(String(id), String(text), "markdown")),
+     },
+@@ -7430,6 +7445,7 @@
+                     };
+                     Ok(upgrade(&text_view_runtime, &ctx)?.push_node(Component::TextView(
+                         crate::spec::TextViewSpec {
++                            state: None,
+                             id: id.into(),
+                             text: text.into(),
+                             format,
+--- a/vendor/gpui-kit/crates/shell/src/entities.rs
++++ b/vendor/gpui-kit/crates/shell/src/entities.rs
+@@ -59,6 +59,7 @@
+ 
+ /// What a handle points at. One variant per entity type the script can create.
+ enum Record {
++    Markdown { state: Entity<crate::markdown_search::MarkdownSearch>, application: Option<Rc<ApplicationGeneration>> },
+     /// A retained script view. Its entity owns the child snapshot lifecycle;
+     /// this record owns the script-visible handle.
+     View {
+@@ -314,6 +315,7 @@
+             Record::Textarea { .. } => Some("TextareaState"),
+             // HERDR: expose the distinct code-editor handle type.
+             Record::Editor { .. } => Some("EditorState"),
++            Record::Markdown { .. } => Some("TextViewState"),
+             Record::Calendar { .. } => Some("CalendarState"),
+             Record::Slider { .. } => Some("SliderState"),
+             Record::Otp { .. } => Some("OtpState"),
+@@ -495,6 +497,15 @@
+         })
+     }
+ 
++    pub(crate) fn create_markdown(&mut self, text: &str, application: Option<Rc<ApplicationGeneration>>, cx: &mut App) -> Result<EntityHandle, EntityLimitError> {
++        self.ensure_capacity()?;
++        let state = cx.new(|cx| crate::markdown_search::MarkdownSearch::new(text, cx));
++        self.push(Record::Markdown { state, application })
++    }
++    pub(crate) fn markdown(&self, handle: EntityHandle) -> Option<Entity<crate::markdown_search::MarkdownSearch>> {
++        match self.record(handle) { Some(Record::Markdown { state, .. }) => Some(state.clone()), _ => None }
++    }
++
+     // HERDR: never resolve an editor as an input or textarea.
+     pub fn editor(&self, handle: EntityHandle) -> Option<Entity<EditorState>> {
+         match self.record(handle) {
+@@ -1044,6 +1055,7 @@
+                 }
+                 // HERDR: unload editors and their subscriptions with the owning mod.
+                 | Record::Editor { application: owner, .. }
++                | Record::Markdown { application: owner, .. }
+                 | Record::Slider {
+                     application: owner, ..
+                 }
+--- a/vendor/gpui-kit/crates/shell/src/lib.rs
++++ b/vendor/gpui-kit/crates/shell/src/lib.rs
+@@ -451,3 +451,5 @@
+ pub fn clear_exported_modules() {
+     host_modules::clear_modules();
+ }
++
++mod markdown_search;
+--- a/vendor/gpui-kit/crates/shell/src/materialize.rs
++++ b/vendor/gpui-kit/crates/shell/src/materialize.rs
+@@ -1107,11 +1107,15 @@
+             )
+         }
+         Component::TextView(spec) => {
+-            let mut view = match spec.format {
++            let mut view = if let Some(handle) = spec.state {
++                let Some(state) = runtime.entities().markdown(handle) else {
++                    return gpui::div().child("Markdown state was released").into_any_element();
++                };
++                TextView::new(&state.read(cx).view)
++            } else { match spec.format {
+                 crate::spec::TextViewFormat::Html => TextView::html(spec.id, spec.text),
+                 crate::spec::TextViewFormat::Markdown => TextView::markdown(spec.id, spec.text),
+-            }
+-            .style(TextViewStyle::from_theme(&Theme::global(cx)));
++            }}.style(TextViewStyle::from_theme(&Theme::global(cx)));
+             if let Some(selectable) = behavior.selectable {
+                 view = view.selectable(selectable);
+             }
+--- a/vendor/gpui-kit/crates/shell/src/spec.rs
++++ b/vendor/gpui-kit/crates/shell/src/spec.rs
+@@ -202,6 +202,7 @@
+ /// loads happen in later native rendering phases, after the script scope ends.
+ #[derive(Clone)]
+ pub(crate) struct TextViewSpec {
++    pub(crate) state: Option<crate::entities::EntityHandle>,
+     pub(crate) id: SharedString,
+     pub(crate) text: SharedString,
+     pub(crate) format: TextViewFormat,
+@@ -222,6 +223,7 @@
+ impl PartialEq for TextViewSpec {
+     fn eq(&self, other: &Self) -> bool {
+         self.id == other.id
++            && self.state == other.state
+             && self.text == other.text
+             && self.format == other.format
+             && Rc::ptr_eq(&self.policy, &other.policy)
+--- a/vendor/gpui-kit/crates/shell/src/typings.rs
++++ b/vendor/gpui-kit/crates/shell/src/typings.rs
+@@ -2455,7 +2455,16 @@
+     selectable(value?: boolean): this;
+     scrollable(value?: boolean): this;
+   }
++  export interface TextViewState {
++    value(): string;
++    status(): string;
++    search(query: string, direction?: -1 | 0 | 1): string;
++    close_search(): void;
++    release(): boolean;
++  }
++  export const TextViewState: { markdown(text: string): TextViewState };
+   export const TextView: {
++    new(state: TextViewState): TextViewElement;
+     html(id: string, html: string): TextViewElement;
+     markdown(id: string, markdown: string): TextViewElement;
+   };
+--- /dev/null
++++ b/vendor/gpui-kit/crates/shell/src/markdown_search.rs
+@@ -0,0 +1,66 @@
++//! Retained Markdown search uses the rendered text, preserving formatting and links.
++use gpui::{AppContext, Context, Entity, Subscription};
++use gpui_base::{RangeHighlight, RenderedText, TextViewState};
++use gpui_base::input::{Rope, SearchMatcher};
++
++pub(crate) struct MarkdownSearch {
++    pub view: Entity<TextViewState>,
++    query: String,
++    matcher: SearchMatcher,
++    snapshot: Option<RenderedText>,
++    _subscription: Subscription,
++    owner: Option<gpui::WeakEntity<crate::view::ScriptView>>,
++}
++
++impl MarkdownSearch {
++    pub fn new(text: &str, cx: &mut Context<Self>) -> Self {
++        let view = cx.new(|cx| TextViewState::markdown(text, cx));
++        let subscription = cx.observe(&view, |this: &mut Self, view, cx| {
++            let snapshot = view.read(cx).rendered_text();
++            if this.snapshot.as_ref() != Some(&snapshot) {
++                if let Err(error) = this.apply(0, false, cx) {
++                    tracing::warn!(%error, "Markdown search refresh failed");
++                }
++                if let Some(owner) = &this.owner { let _ = owner.update(cx, |view, cx| view.refresh(cx)); }
++            }
++        });
++        Self { view, query: String::new(), matcher: SearchMatcher::new(), snapshot: None, _subscription: subscription, owner: crate::scope::current_view().map(|view| view.downgrade()) }
++    }
++
++    pub fn status(&self) -> String { self.matcher.label() }
++
++    pub fn value(&self, cx: &gpui::App) -> String {
++        self.view.read(cx).rendered_text().as_str().to_owned()
++    }
++
++    pub fn search(&mut self, query: &str, direction: i32, cx: &mut Context<Self>) -> anyhow::Result<String> {
++        if !(-1..=1).contains(&direction) { anyhow::bail!("search direction must be -1, 0 or 1"); }
++        if self.query != query {
++            self.query = query.to_owned();
++            self.matcher.update_query(query, false);
++        }
++        self.apply(direction, true, cx)
++    }
++
++    fn apply(&mut self, direction: i32, reveal: bool, cx: &mut Context<Self>) -> anyhow::Result<String> {
++        let snapshot = self.view.read(cx).rendered_text();
++        if self.snapshot.as_ref() != Some(&snapshot) {
++            self.matcher.update(&Rope::from(snapshot.as_str()));
++            self.snapshot = Some(snapshot);
++        }
++        if direction > 0 { self.matcher.next(); }
++        if direction < 0 { self.matcher.next_back(); }
++        let ranges = self.matcher.matched_ranges();
++        let active = self.matcher.current_match_index();
++        self.view.update(cx, |view, cx| -> anyhow::Result<()> {
++            view.set_range_highlights(ranges.iter().enumerate().map(|(index, range)| {
++                RangeHighlight::new(range.clone(), if index == active {
++                    gpui::hsla(0.07, 1.0, 0.5, 0.4)
++                } else { gpui::hsla(0.12, 1.0, 0.5, 0.22) })
++            }), cx)?;
++            if reveal && let Some(range) = ranges.get(active) { view.reveal_range(range.clone(), cx)?; }
++            Ok(())
++        })?;
++        Ok(self.matcher.label())
++    }
++}

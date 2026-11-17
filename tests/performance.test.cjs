@@ -129,6 +129,7 @@ test('preview filters unrelated events, defers hidden tabs, and refreshes on ret
   c.isMarkdown = () => false;
   c.watchFolder = () => new Promise(resolve => watchers.push(resolve));
   load(c, 'git-file-preview/fileIcons.js', ['fileIcon']);
+  load(c, 'git-file-preview/search.js', ['PreviewSearch']);
   load(c, 'git-file-preview/main.js', ['FilePreview']);
   const view = new c.FilePreview();
   // Leave the long-lived watcher separate from finite refresh jobs.
@@ -182,6 +183,7 @@ test('a file event during an active preview read is processed afterward', async 
   };
   c.watchFolder = () => new Promise(resolve => watchers.push(resolve));
   load(c, 'git-file-preview/fileIcons.js', ['fileIcon']);
+  load(c, 'git-file-preview/search.js', ['PreviewSearch']);
   load(c, 'git-file-preview/main.js', ['FilePreview']);
   h.cx.spawn = fn => { fn(h.cx).catch(() => {}); };
   const view = new c.FilePreview(), settle = () => new Promise(resolve => setImmediate(resolve));
@@ -202,6 +204,7 @@ test('unchanged Markdown keeps its render identity while changes outside the dif
   c.readFile = async () => result;
   c.readMarkdown = async () => ({ text, truncated: false, deleted: false });
   load(c, 'git-file-preview/fileIcons.js', ['fileIcon']);
+  load(c, 'git-file-preview/search.js', ['PreviewSearch']);
   load(c, 'git-file-preview/main.js', ['FilePreview']);
   const view = new c.FilePreview(); view.watch = () => {};
   view.init({}, h.cx); await h.flush();

@@ -31,6 +31,7 @@ Tested on **macOS with Herdr 0.1.15**. Required: Git, Python **3.9+**, and ripgr
 The file editor supports local UTF-8 text files up to 1 MiB. It keeps recovery drafts and refuses to overwrite external edits until you review the saved version. Remote files and binary files cannot be edited.
 Cmd+F / Ctrl+F opens case-sensitive text search in the editor. Enter / Shift+Enter moves between matches, wrapping at either end; Escape closes the find field. Cmd+S / Ctrl+S saves.
 Highlighting every match in yellow and the current match in orange requires the optional [native search bridge](native/README.md). Released Herdr builds without that bridge use selection-only search.
+Git file previews also support Cmd+F / Ctrl+F in Diff (Unified and Split), Source, Review, and rendered Markdown Preview. Enter / Shift+Enter navigates matches, Escape closes search, and the query follows tab changes. Markdown Preview searches the rendered words and needs the [native Markdown search bridge](native/README.md).
 
 Working-file previews ignore unrelated folder changes and defer refreshes while their tab is hidden.
 The Changes preview includes Diff, Source and rendered Markdown tabs, unified or aligned split diffs,

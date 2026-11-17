@@ -1,12 +1,13 @@
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex, Input, InputState, Button, Popover, ScrollHandle } from "gpui-base";
-import { exec, appHome, setShared } from "herdr";
+import { exec, appHome, setShared, settings } from "herdr";
 import { diffRows } from "./content.js";
 import { highlightRows } from "./highlight.js";
 
 export class Review {
   constructor(owner, cx) {
     this.owner = owner; this.focus = cx.focus_handle(); this.scroll = ScrollHandle.new();
+    this.contentScroll = ScrollHandle.new();
     this.search = InputState.new({ placeholder: "Filter branches…" });
     this.search.on("change", (_e, cx) => { this.at = 0; this.scroll.scroll_to_item(0); cx.notify(); });
     this.search.on("submit", (_e, cx) => this.choose(this.choices()[this.at], cx));
@@ -32,7 +33,7 @@ export class Review {
         result = JSON.parse(r.stdout || '{}'); if (r.code || result.error) throw new Error(result.error || r.stderr);
       } catch (e) { result = null; if (version === this.owner.version) this.error = e.message; }
       finally { this.busy = false; cx.notify(); }
-      if (result && version === this.owner.version) next?.(result, cx);
+      if (result && version === this.owner.version) { next?.(result, cx); if (this.owner.search?.open) this.owner.search.find(cx); }
     }); cx.notify();
   }
   load(cx) {
@@ -60,6 +61,39 @@ export class Review {
       this.confirm = null; setShared("noodle.files.changed", { root: this.owner.root, sequence: Date.now() }); this.owner.refresh(cx, true); this.load(cx);
     });
   }
+  searchEntries() {
+    const entries = [], add = (key, text, block) => String(text).split("\n").forEach((text, line) => entries.push({ key: `${key}.${line}`, text, block }));
+    let block = 0;
+    if (this.mode === "hunks") {
+      block += Boolean(this.hunks?.syntaxError) + Boolean(this.hunks && !this.hunks.hunks.length);
+      (this.hunks?.rows || []).forEach((rows, index) => {
+        block += 1 + Number(this.confirm === index);
+        for (const row of rows) entries.push({ key: row, text: row.text, block: block++ });
+        block++;
+      });
+    }
+    if (this.mode === "compare") {
+      block++;
+      if (this.comparison) add("base", `Merge base ${this.comparison.base.slice(0, 8)} → HEAD ${this.comparison.head.slice(0, 8)}`, block++);
+      for (const file of this.comparison?.files || []) add(`file-${file.path}`, `${file.status}  ${file.path}`, block++);
+    }
+    if (this.mode === "pr" && this.pr) {
+      const p = this.pr;
+      add("pr-title", `#${p.number} ${p.title}`, block++);
+      add("pr-head", `${p.headRefName} → ${p.baseRefName} · ${p.headRefOid.slice(0, 8)}`, block++);
+      add("pr-check", p.headRefOid === p.localHead ? "Checks match local HEAD" : "PR checks belong to a different commit than local HEAD", block++);
+      block++;
+      add("pr-review", `Review: ${p.reviewDecision || "No review decision"}`, block++);
+      (p.reviews || []).forEach((r, i) => add(`review-${i}`, `${r.author?.login || "Reviewer"}: ${r.state}${r.body ? ` · ${r.body}` : ""}`, block++));
+      (p.statusCheckRollup || []).forEach((check, i) => add(`check-${i}`, `${check.name || check.context} · ${check.conclusion || check.status || check.state}`, block++));
+    }
+    if (this.log) add("log", this.log.text || "No failure logs", block);
+    return entries;
+  }
+  revealSearch(match) { this.contentScroll.scroll_to_item(match.block); }
+  mark(text, key, t, color = t.foreground) {
+    return v_flex().min_w(0).children(String(text).split("\n").map((line, i) => this.owner.search.paint(line, `${key}.${i}`, null, t, color, true)));
+  }
   branchPicker(t, cx, button) {
     const choices = this.choices();
     return Popover.new("review-branch-picker").open(this.branchOpen).anchor("bottom_left").track_focus(this.focus)
@@ -83,44 +117,48 @@ export class Review {
   }
   render(t, cx) {
     const s = this.owner.selection;
-    const button = (id, label, fn, disabled = this.busy) => Button.new(id).h(28).px(10).flex_none().rounded(5).border_1().border_color(t.border).bg(t.raised).text_color(t.foreground).text_size(12).font_normal()
-      .disabled(Boolean(disabled)).accessibility_label(label).hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent)).on_click((_e, cx) => fn(cx)).child(label);
-    return v_flex().id("git-review-tools").flex_1().min_h(0)
+    const hunkWidths = (this.hunks?.rows || []).map(rows => Math.max(300, ...rows.map(row => row.text.length * 7 + 110)));
+    const button = (id, label, fn, disabled = this.busy, content = label) => Button.new(id).h(28).px(10).flex_none().rounded(5).border_1().border_color(t.border).bg(t.raised).text_color(t.foreground).text_size(12).font_normal()
+      .disabled(Boolean(disabled)).accessibility_label(label).hover(el => el.bg(t.hover)).focus(el => el.border_color(t.accent)).on_click((_e, cx) => fn(cx)).child(content);
+    return v_flex().id("git-review-tools").w_full().flex_1().min_w(0).min_h(0)
+      .on_size_change((size, cx) => { if (this.width !== size.width) { this.width = size.width; cx.notify(); } })
       .child(h_flex().h(44).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).bg(t.background).overflow_x_scrollbar()
         .child(this.owner.segments("review-mode", [...(!s.hash && s.file ? [["hunks", "File hunks"]] : []), ["compare", "Compare branch"], ["pr", "PR / CI"]], this.mode, (mode, cx) => { if (!this.busy) this.show(mode, cx); }, t)))
       .when(this.busy, el => el.child(div().px(16).py(8).text_color(t.muted).child("Loading…")))
       .when(Boolean(this.error), el => el.child(div().px(16).py(12).text_color(t.ansi1).child(this.error)))
-      .child(v_flex().id("review-content").flex_1().min_h(0).overflow_y_scrollbar().px(16).py(12).gap(12)
+      .child(v_flex().id("review-content").w_full().flex_1().min_w(0).min_h(0).overflow_scrollbar().px(16).py(12).gap(this.mode === "hunks" ? 0 : 12)
+        .track_scroll(this.contentScroll).on_mouse_down("left", () => this.owner.search.focus.focus())
         .when(this.mode === "hunks", el => el
           .when(Boolean(this.hunks?.syntaxError), el => el.child(div().text_color(t.muted).child(this.hunks.syntaxError)))
           .when(Boolean(this.hunks && !this.hunks.hunks.length), el => el.child(div().text_color(t.muted).child("No textual hunks in this version. New files use whole-file staging.")))
-          .children((this.hunks?.hunks || []).map((hunk, index) => v_flex().gap(8).pb(12).border_b(1).border_color(t.border)
-            .child(h_flex().gap(8).items_center().child(div().flex_1().child(`Hunk ${index + 1}`))
+          .children((this.hunks?.hunks || []).flatMap((hunk, index) => [
+            h_flex().w(Math.max(0, (this.width ?? 600) / (settings().zoom || 1) - 32)).min_w(0).gap(8).items_center().mt(index ? 12 : 0).mb(8).flex_none().child(div().flex_1().min_w(0).truncate().child(`Hunk ${index + 1}`))
               .child(button(`stage-hunk-${index}`, this.hunks.mode === "staged" ? "Unstage hunk" : "Stage hunk", cx => this.apply(this.hunks.mode === "staged" ? "unstage" : "stage", index, cx)))
-              .when(this.hunks.mode !== "staged", el => el.child(button(`discard-hunk-${index}`, "Discard…", cx => this.apply("discard", index, cx)))))
-            .when(this.confirm === index, el => el.child(h_flex().gap(8).items_center().child(div().flex_1().child("Discard this hunk from the working file?"))
+              .when(this.hunks.mode !== "staged", el => el.child(button(`discard-hunk-${index}`, "Discard…", cx => this.apply("discard", index, cx)))),
+            ...(this.confirm === index ? [h_flex().gap(8).items_center().mb(8).flex_none().child(div().flex_1().child("Discard this hunk from the working file?"))
               .child(button("cancel-discard-hunk", "Cancel", cx => { this.confirm = null; cx.notify(); }))
-              .child(button("confirm-discard-hunk", "Discard hunk", cx => this.apply("discard", index, cx, true)))))
-            .child(div().w_full().id(`review-hunk-${index}`).overflow_x_scrollbar().font_family("JetBrains Mono").text_size(12).line_height("24px")
-              .children(this.hunks.rows[index].map(row => this.owner.diffRow(row, t)))))))
+              .child(button("confirm-discard-hunk", "Discard hunk", cx => this.apply("discard", index, cx, true)))] : []),
+            ...this.hunks.rows[index].map((row, line) => div().id(`review-hunk-${index}-row-${line}`).flex_none().min_w(hunkWidths[index]).font_family("JetBrains Mono").text_size(12).line_height("24px").child(this.owner.diffRow(row, t))),
+            div().h(1).mt(12).flex_none().bg(t.border),
+          ])))
         .when(this.mode === "compare", el => el
           .child(h_flex().gap(8).items_center().child(this.branchPicker(t, cx, button)).child(button("compare-ref", "Compare", cx => this.call("review_compare", { ref: this.branch.ref }, cx, data => { this.comparison = data; }), this.busy || !this.branch)))
-          .when(Boolean(this.comparison), el => el.child(div().text_color(t.muted).child(`Merge base ${this.comparison.base.slice(0, 8)} → HEAD ${this.comparison.head.slice(0, 8)}`)))
-          .children((this.comparison?.files || []).map(file => button(`compare-${file.path}`, `${file.status}  ${file.path}`, cx => this.owner.openFile(file, null, cx, { hash: this.comparison.head, parent: this.comparison.base, kind: "diff", commit: null }))))
+          .when(Boolean(this.comparison), el => el.child(div().text_color(t.muted).child(this.mark(`Merge base ${this.comparison.base.slice(0, 8)} → HEAD ${this.comparison.head.slice(0, 8)}`, "base", t, t.muted))))
+          .children((this.comparison?.files || []).map(file => button(`compare-${file.path}`, `${file.status}  ${file.path}`, cx => this.owner.openFile(file, null, cx, { hash: this.comparison.head, parent: this.comparison.base, kind: "diff", commit: null }), this.busy, this.mark(`${file.status}  ${file.path}`, `file-${file.path}`, t)))))
           .when(this.comparison?.incomplete, el => el.child(div().child("Comparison limited to 1,000 files"))))
         .when(this.mode === "pr" && Boolean(this.pr), el => el
-          .child(div().font_semibold().child(`#${this.pr.number} ${this.pr.title}`))
-          .child(div().text_color(t.muted).child(`${this.pr.headRefName} → ${this.pr.baseRefName} · ${this.pr.headRefOid.slice(0, 8)}`))
-          .child(div().text_color(this.pr.headRefOid === this.pr.localHead ? t.ansi2 : t.ansi3).child(this.pr.headRefOid === this.pr.localHead ? "Checks match local HEAD" : "PR checks belong to a different commit than local HEAD"))
+          .child(div().font_semibold().child(this.mark(`#${this.pr.number} ${this.pr.title}`, "pr-title", t)))
+          .child(div().text_color(t.muted).child(this.mark(`${this.pr.headRefName} → ${this.pr.baseRefName} · ${this.pr.headRefOid.slice(0, 8)}`, "pr-head", t, t.muted)))
+          .child(div().child(this.mark(this.pr.headRefOid === this.pr.localHead ? "Checks match local HEAD" : "PR checks belong to a different commit than local HEAD", "pr-check", t, this.pr.headRefOid === this.pr.localHead ? t.ansi2 : t.ansi3)))
           .child(button("copy-pr-link", "Copy PR link", cx => cx.write_to_clipboard(this.pr.url)))
-          .child(div().child(`Review: ${this.pr.reviewDecision || "No review decision"}`))
-          .children((this.pr.reviews || []).map((r, i) => div().py(6).child(`${r.author?.login || "Reviewer"}: ${r.state}${r.body ? ` · ${r.body}` : ""}`)))
+          .child(div().child(this.mark(`Review: ${this.pr.reviewDecision || "No review decision"}`, "pr-review", t)))
+          .children((this.pr.reviews || []).map((r, i) => div().py(6).child(this.mark(`${r.author?.login || "Reviewer"}: ${r.state}${r.body ? ` · ${r.body}` : ""}`, `review-${i}`, t))))
           .children((this.pr.statusCheckRollup || []).map((check, i) => h_flex().min_h(28).gap(8).items_center()
-            .child(div().flex_1().min_w(0).truncate().child(`${check.name || check.context} · ${check.conclusion || check.status || check.state}`))
+            .child(div().flex_1().min_w(0).truncate().child(this.mark(`${check.name || check.context} · ${check.conclusion || check.status || check.state}`, `check-${i}`, t)))
             .when(Boolean(check.detailsUrl || check.targetUrl), el => el.child(button(`copy-check-${i}`, "Copy link", cx => cx.write_to_clipboard(check.detailsUrl || check.targetUrl))))
             .when(Boolean(/\/actions\/runs\/(\d+)/.exec(check.detailsUrl || "")), el => el.child(button(`failure-log-${i}`, "Failure log", cx => this.call("review_log", { run: /\/actions\/runs\/(\d+)/.exec(check.detailsUrl)[1] }, cx, data => { this.log = data; }))))))
         .when(Boolean(this.log), el => el.child(v_flex().gap(8).child(button("copy-failure-log", "Copy failure log", cx => cx.write_to_clipboard(this.log.text)))
           .child(div().text_color(t.muted).child(`Logs for ${this.log.head.slice(0, 8)}${this.log.truncated ? " · last 200,000 characters" : ""}`))
-          .child(div().font_family("JetBrains Mono").text_size(12).child(this.log.text || "No failure logs"))))));
+          .child(div().font_family("JetBrains Mono").text_size(12).child(this.mark(this.log.text || "No failure logs", "log", t))))));
   }
 }
